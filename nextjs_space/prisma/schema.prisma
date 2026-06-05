@@ -1,0 +1,94 @@
+generator client {
+    provider = "prisma-client-js"
+    binaryTargets = ["native", "linux-musl-openssl-3.0.x", "linux-musl-arm64-openssl-3.0.x"]
+}
+
+datasource db {
+    provider = "postgresql"
+    url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  password      String
+  role          String    @default("admin")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  flipbooks     Flipbook[]
+}
+
+model Flipbook {
+  id                  String    @id @default(cuid())
+  uuid                String    @unique @default(uuid())
+  title               String
+  description         String?
+  userId              String
+  user                User      @relation(fields: [userId], references: [id])
+  cloudStoragePath    String
+  isPublic            Boolean   @default(false)
+  thumbnailPath       String?
+  thumbnailIsPublic   Boolean   @default(true)
+  pageCount           Int       @default(0)
+  fileSize            Int       @default(0)
+  status              String    @default("processing")
+  passwordProtected   Boolean   @default(false)
+  password            String?
+  domainRestriction   Boolean   @default(false)
+  allowedDomains      String?
+  pagesPerView        String    @default("double")
+  enableShare         Boolean   @default(true)
+  enablePrint         Boolean   @default(false)
+  enableDownload      Boolean   @default(false)
+  enableAnimatedFlip  Boolean   @default(true)
+  enablePageSound     Boolean   @default(true)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  views               FlipbookView[]
+  pageViews           PageView[]
+
+  @@index([uuid])
+  @@index([userId])
+}
+
+model FlipbookView {
+  id            String    @id @default(cuid())
+  flipbookId    String
+  flipbook      Flipbook  @relation(fields: [flipbookId], references: [id], onDelete: Cascade)
+  sessionId     String
+  ipAddress     String?
+  userAgent     String?
+  country       String?
+  city          String?
+  referrer      String?
+  duration      Int       @default(0)
+  createdAt     DateTime  @default(now())
+
+  @@index([flipbookId])
+  @@index([createdAt])
+}
+
+model PageView {
+  id            String    @id @default(cuid())
+  flipbookId    String
+  flipbook      Flipbook  @relation(fields: [flipbookId], references: [id], onDelete: Cascade)
+  sessionId     String
+  pageNumber    Int
+  duration      Int       @default(0)
+  createdAt     DateTime  @default(now())
+
+  @@index([flipbookId])
+  @@index([flipbookId, pageNumber])
+}
+
+model BrandingSettings {
+  id              String    @id @default(cuid())
+  logoPath        String?
+  logoIsPublic    Boolean   @default(true)
+  primaryColor    String    @default("#4F46E5")
+  secondaryColor  String    @default("#7C3AED")
+  loadingText     String    @default("Loading your flipbook...")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}

@@ -1,0 +1,8 @@
+[
+  {
+    "origin": ["https://flipbook-app-252420765712.australia-southeast1.run.app"],
+    "method": ["GET", "PUT", "POST", "DELETE", "HEAD", "OPTIONS"],
+    "responseHeader": ["Content-Type", "Content-Disposition", "Authorization", "x-goog-resumable", "ETag"],
+    "maxAgeSeconds": 3600
+  }
+]

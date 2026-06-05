@@ -1,0 +1,20 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    id: build
+    args:
+      - 'build'
+      - '-t'
+      - 'australia-southeast1-docker.pkg.dev/flipbook-498103/flipbook-repo/flipbook-app:latest'
+      - '.'
+    dir: 'nextjs_space'
+  - name: 'gcr.io/cloud-builders/docker'
+    id: push
+    args:
+      - 'push'
+      - 'australia-southeast1-docker.pkg.dev/flipbook-498103/flipbook-repo/flipbook-app:latest'
+    waitFor: ['build']
+images:
+  - 'australia-southeast1-docker.pkg.dev/flipbook-498103/flipbook-repo/flipbook-app:latest'
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8

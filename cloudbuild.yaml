@@ -1,0 +1,52 @@
+steps:
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    id: build
+    args:
+      - 'build'
+      - '-t'
+      - 'australia-southeast1-docker.pkg.dev/flipbook-498103/flipbook-repo/flipbook-app:$COMMIT_SHA'
+      - '-t'
+      - 'australia-southeast1-docker.pkg.dev/flipbook-498103/flipbook-repo/flipbook-app:latest'
+      - '.'
+    dir: 'nextjs_space'
+
+  # Push the image to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    id: push
+    args:
+      - 'push'
+      - '--all-tags'
+      - 'australia-southeast1-docker.pkg.dev/flipbook-498103/flipbook-repo/flipbook-app'
+    waitFor: ['build']
+
+  # Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: deploy
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        gcloud run deploy flipbook-app \
+          --image australia-southeast1-docker.pkg.dev/flipbook-498103/flipbook-repo/flipbook-app:$COMMIT_SHA \
+          --region australia-southeast1 \
+          --platform managed \
+          --add-cloudsql-instances flipbook-498103:australia-southeast1:flipbook-db \
+          --service-account flipbook-runner@flipbook-498103.iam.gserviceaccount.com \
+          --min-instances 1 \
+          --max-instances 10 \
+          --memory 1Gi \
+          --cpu 1 \
+          --port 3000 \
+          --allow-unauthenticated \
+          --update-secrets DATABASE_URL=DATABASE_URL:latest,NEXTAUTH_SECRET=NEXTAUTH_SECRET:latest,NEXTAUTH_URL=NEXTAUTH_URL:latest,GCS_BUCKET_NAME=GCS_BUCKET_NAME:latest,GCS_HMAC_ACCESS_ID=GCS_HMAC_ACCESS_ID:latest,GCS_HMAC_SECRET=GCS_HMAC_SECRET:latest \
+          --update-env-vars NODE_ENV=production
+    waitFor: ['push']
+
+images:
+  - 'australia-southeast1-docker.pkg.dev/flipbook-498103/flipbook-repo/flipbook-app:$COMMIT_SHA'
+  - 'australia-southeast1-docker.pkg.dev/flipbook-498103/flipbook-repo/flipbook-app:latest'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8

@@ -1,0 +1,7 @@
+.git
+nextjs_space/node_modules
+nextjs_space/.next
+nextjs_space/.env
+nextjs_space/.env.local
+nextjs_space/.env.*.local
+*.log
