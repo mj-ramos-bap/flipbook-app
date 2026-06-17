@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
-import { Palette, Upload, Save, Loader2, Check, Type, Image as ImageIcon } from "lucide-react";
+import { Palette, Upload, Save, Loader2, Check, Type, Image as ImageIcon, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,6 +13,7 @@ export default function BrandingContent() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState(false);
   const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
@@ -54,7 +55,7 @@ export default function BrandingContent() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      await fetch("/api/branding", {
+      const res = await fetch("/api/branding", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -65,10 +66,13 @@ export default function BrandingContent() {
           logoIsPublic: branding?.logoIsPublic ?? true,
         }),
       });
+      if (!res.ok) throw new Error("Save failed");
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e: any) {
       console.error(e);
+      setSaveError(true);
+      setTimeout(() => setSaveError(false), 3000);
     } finally {
       setSaving(false);
     }
@@ -160,6 +164,11 @@ export default function BrandingContent() {
           </CardContent>
         </Card>
 
+        {saveError && (
+          <div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 px-4 py-3 rounded-lg">
+            <AlertCircle className="w-4 h-4 flex-shrink-0" /> Failed to save branding. Please try again.
+          </div>
+        )}
         <Button onClick={handleSave} disabled={saving}
           className="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700" size="lg">
           {saving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : saved ? <Check className="w-4 h-4 mr-2" /> : <Save className="w-4 h-4 mr-2" />}

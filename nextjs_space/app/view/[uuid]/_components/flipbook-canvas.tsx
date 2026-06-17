@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Maximize, Minimize,
-  Grid3X3, Search, Share2, Printer, X, BookOpen, Loader2,
+  Grid3X3, Search, Share2, Printer, Download, X, BookOpen, Loader2,
   ChevronFirst, ChevronLast, Volume2, VolumeX, List,
   ChevronUp, ChevronDown,
 } from "lucide-react";
@@ -48,6 +48,7 @@ export default function FlipbookCanvas({
   const fsTransitionRef    = useRef(false); // set BEFORE exitFullscreen() so resize is blocked immediately
   const goToPageRef   = useRef<(p: number) => void>(() => {});
   const pageTextsRef  = useRef<Map<number, string>>(new Map());
+  const savedPageRef  = useRef(1); // preserves page when re-initializing on mode toggle
 
   // ── State ─────────────────────────────────────────────────────────
   const [totalPages,     setTotalPages]     = useState(0);
@@ -217,12 +218,11 @@ export default function FlipbookCanvas({
   useEffect(() => {
     if (!pdfLoaded || pageNatW === 0 || totalPages === 0) return;
 
-    // Calculate single-page display size to fit the viewport
     const toolbarH = 100;
     const availH   = (window.innerHeight - toolbarH) * 0.90;
-    const availW   = isDouble
-      ? (window.innerWidth - 60) / 2
-      : (window.innerWidth - 60) * 0.82;
+    // Single-page mode (usePortrait:true) can use most of the viewport width.
+    // Double-page mode fits two pages side by side.
+    const availW   = isDouble ? (window.innerWidth - 60) / 2 : window.innerWidth - 80;
     const scale    = Math.min(availW / pageNatW, availH / pageNatH);
     const dw       = Math.round(pageNatW * scale);
     const dh       = Math.round(pageNatH * scale);
@@ -244,17 +244,23 @@ export default function FlipbookCanvas({
         setBookReady(false);
       }
 
-      const wrap = bookWrapRef.current;
-      wrap.innerHTML = "";
-      // Explicit container size so PageFlip reads correct dimensions on re-init
-      wrap.style.cssText = `display:block;width:${dw * 2}px;height:${dh}px;`;
+      // bookWrapRef is the stable React-managed anchor. We create a fresh inner
+      // container for PageFlip each init so it starts with a clean DOM state —
+      // PageFlip leaves behind styles/classes on its root that break re-init
+      // when the usePortrait option changes between single and double mode.
+      const wrapOuter = bookWrapRef.current;
+      wrapOuter.innerHTML = "";
+      wrapOuter.removeAttribute("style");
+      const wrap = document.createElement("div");
+      wrap.style.cssText = `display:block;width:${isDouble ? dw * 2 : dw}px;height:${dh}px;`;
+      wrapOuter.appendChild(wrap);
+
       canvasesRef.current = new Array(totalPages).fill(null);
       renderedRef.current.clear();
 
       const pageDivs: HTMLDivElement[] = [];
       for (let i = 0; i < totalPages; i++) {
         const div = document.createElement("div");
-        // Explicit page dimensions — critical so PageFlip can measure on re-init
         div.style.cssText = `background:#fff;overflow:hidden;position:relative;width:${dw}px;height:${dh}px;`;
 
         const canvas = document.createElement("canvas");
@@ -262,12 +268,9 @@ export default function FlipbookCanvas({
         div.appendChild(canvas);
         canvasesRef.current[i] = canvas;
 
-        // Inner-edge gutter shadow: left pages shadow their RIGHT edge,
-        // right pages shadow their LEFT edge — same as a real book binding.
-        // Cover (i=0) and back-cover (i=totalPages-1) get no inner shadow.
-        const isInner = i > 0 && i < totalPages - 1;
+        // Inner-edge gutter shadow only in double-page mode.
+        const isInner = isDouble && i > 0 && i < totalPages - 1;
         if (isInner) {
-          // With showCover:true, odd-indexed inner pages sit on the LEFT
           const isLeftPage = i % 2 === 1;
           const gutter = document.createElement("div");
           gutter.style.cssText = [
@@ -292,8 +295,11 @@ export default function FlipbookCanvas({
         height:             dh,
         size:               "fixed",
         drawShadow:         true,
-        flippingTime:       enableAnimatedFlip ? 800 : 1,
-        usePortrait:        false, // always double-page; single-page handled via CSS clip
+        // Single-page portrait mode: instant (1ms) so forward/backward look the same.
+        // The backward portrait flip briefly exposes a two-page spread layout — instant
+        // transitions eliminate the visual inconsistency.
+        flippingTime:       enableAnimatedFlip && isDouble ? 800 : 1,
+        usePortrait:        !isDouble, // portrait mode = single-page (advances 1 per flip)
         startZIndex:        0,
         maxShadowOpacity:   0.6,
         showCover:          true,
@@ -309,10 +315,10 @@ export default function FlipbookCanvas({
       if (cancelled) { try { pf.destroy?.(); } catch {} return; }
       pageFlipRef.current = pf;
 
-      // Pre-render first few pages for immediate display
-      for (let i = 1; i <= Math.min(isDouble ? 4 : 2, totalPages); i++) {
-        renderPdfPage(i);
-      }
+      // Await initial page renders so canvases are never blank on first display
+      const preCount = Math.min(isDouble ? 4 : 2, totalPages);
+      await Promise.all(Array.from({ length: preCount }, (_, i) => renderPdfPage(i + 1)));
+      if (cancelled) return;
 
       pf.on("flip", (e: any) => {
         if (cancelled) return;
@@ -328,9 +334,20 @@ export default function FlipbookCanvas({
       });
 
       setBookReady(true);
+
+      // Restore page position after a mode-toggle re-init
+      const pageToRestore = savedPageRef.current;
+      if (pageToRestore > 1 && !cancelled) {
+        setTimeout(() => {
+          if (!cancelled) goToPageRef.current(pageToRestore);
+        }, 150);
+      }
     })();
 
     return () => {
+      // Capture current page BEFORE destroying so the next init can restore it
+      const currentIdx = pageFlipRef.current?.getCurrentPageIndex?.() ?? 0;
+      savedPageRef.current = currentIdx + 1;
       cancelled = true;
       if (pageFlipRef.current) {
         try { pageFlipRef.current.destroy?.(); } catch {}
@@ -338,15 +355,14 @@ export default function FlipbookCanvas({
       }
       setBookReady(false);
     };
-  }, [pdfLoaded, pageNatW, pageNatH, totalPages, enableAnimatedFlip, renderPdfPage, onPageChange, resizeKey]);
-
-  // isDouble toggle is handled via CSS only — no PageFlip re-init needed
+  }, [pdfLoaded, pageNatW, pageNatH, totalPages, isDouble, enableAnimatedFlip, renderPdfPage, onPageChange, resizeKey]);
 
   // ── Zoom ─────────────────────────────────────────────────────────
   // CSS zoom is instant (smooth). Re-rendering pages at new resolution
   // is deferred 400ms after the user stops, so dragging the slider or
   // scrolling with Ctrl+wheel feels immediate.
   const reRenderTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (reRenderTimer.current) clearTimeout(reRenderTimer.current); }, []);
 
   const applyZoom = useCallback((next: number) => {
     const clamped = Math.max(0.5, Math.min(3, next));
@@ -619,6 +635,19 @@ export default function FlipbookCanvas({
               <Printer className="w-4 h-4" />
             </Button>
           )}
+          {enableDownload && (
+            <Button variant="ghost" size="icon" className="text-gray-300 hover:text-white h-8 w-8"
+              onClick={() => {
+                const a = document.createElement("a");
+                a.href = pdfUrl;
+                a.download = `${title}.pdf`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+              }} title="Download PDF">
+              <Download className="w-4 h-4" />
+            </Button>
+          )}
         </div>
       </div>
 
@@ -725,49 +754,39 @@ export default function FlipbookCanvas({
               : 1;
             const totalZoom = zoom * fsZoom;
 
+            // Always use the same 3-level DOM structure so bookWrapRef is never
+            // recreated when toggling modes. Recreating it detaches PageFlip.
+            let clipStyle: React.CSSProperties = {};
+            let innerStyle: React.CSSProperties;
+
             if (!isDouble && displayW > 0) {
-              // ── SINGLE-PAGE MODE (CSS only, PageFlip never re-initialized) ──
-              // The book is still double-page internally. We clip it to one page
-              // width and shift so the RIGHT page is visible (LEFT for back cover).
-              //
-              // Math (transformOrigin = center of the book div = x:displayW):
-              //   Right page visible → translateX(-displayW) scale(S)
-              //   Left page (back cover) → translateX(displayW*(S-1)) scale(S)
-              const singleT = currentPage === totalPages
-                ? displayW * (totalZoom - 1)  // back cover: show left page
-                : -displayW;                   // all others: show right page
+              // ── SINGLE-PAGE MODE (usePortrait:true — PageFlip renders natively) ──
+              // No CSS clipping; PageFlip advances 1 page per flip in portrait mode.
+              clipStyle = {};
+              innerStyle = {
+                transform: `scale(${totalZoom})`,
+                transformOrigin: 'center center',
+              };
+            } else {
+              // ── DOUBLE-PAGE MODE ──
+              const coverShift = displayW > 0
+                ? currentPage === 1 ? -displayW / 2
+                  : currentPage === totalPages ? displayW / 2
+                  : 0
+                : 0;
 
-              return (
-                <div style={{
-                  overflow: 'hidden',
-                  width: `${Math.round(displayW * totalZoom)}px`,
-                  height: '100%',
-                }}>
-                  <div style={{
-                    transform: `translateX(${singleT}px) scale(${totalZoom})`,
-                    transformOrigin: 'center center',
-                    transition: 'transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94)',
-                  }}>
-                    <div ref={bookWrapRef} />
-                  </div>
-                </div>
-              );
-            }
-
-            // ── DOUBLE-PAGE MODE ──
-            const coverShift = displayW > 0
-              ? currentPage === 1 ? -displayW / 2
-                : currentPage === totalPages ? displayW / 2
-                : 0
-              : 0;
-
-            return (
-              <div style={{
+              innerStyle = {
                 transform: `translateX(${coverShift * totalZoom}px) scale(${totalZoom})`,
                 transformOrigin: 'center center',
                 transition: 'transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94)',
-              }}>
-                <div ref={bookWrapRef} />
+              };
+            }
+
+            return (
+              <div style={clipStyle}>
+                <div style={innerStyle}>
+                  <div ref={bookWrapRef} />
+                </div>
               </div>
             );
           })()}

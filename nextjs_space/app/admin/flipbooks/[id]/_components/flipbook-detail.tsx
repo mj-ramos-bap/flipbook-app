@@ -76,11 +76,12 @@ export default function FlipbookDetail({ id }: { id: string }) {
   const handleSave = async () => {
     setSaving(true);
     try {
-      await fetch(`/api/flipbooks/${id}`, {
+      const res = await fetch(`/api/flipbooks/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),
       });
+      if (!res.ok) throw new Error("Save failed");
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
       toast.success("Changes saved successfully");

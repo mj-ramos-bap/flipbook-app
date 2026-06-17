@@ -50,7 +50,8 @@ export default function DashboardContent() {
   const handleDelete = async (id: string) => {
     if (!confirm("Are you sure you want to delete this flipbook?")) return;
     try {
-      await fetch(`/api/flipbooks/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/flipbooks/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Delete failed");
       setFlipbooks((prev) => (prev ?? [])?.filter?.((f: FlipbookItem) => f?.id !== id) ?? []);
       toast.success("Flipbook deleted");
     } catch (e: any) {

@@ -10,6 +10,11 @@ export async function POST(req: Request) {
     if (!email || !password) {
       return NextResponse.json({ error: "Email and password required" }, { status: 400 });
     }
+    // Single-admin model: block registration once any user exists
+    const userCount = await prisma.user.count();
+    if (userCount > 0) {
+      return NextResponse.json({ error: "Registration is closed" }, { status: 403 });
+    }
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) {
       return NextResponse.json({ error: "User already exists" }, { status: 400 });

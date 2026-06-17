@@ -33,7 +33,9 @@ export default function AnalyticsPanel({ flipbookId }: { flipbookId: string }) {
     const a = document.createElement("a");
     a.href = `/api/analytics/export/${flipbookId}`;
     a.download = `analytics-${flipbookId}.csv`;
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
   };
 
   if (loading) {
