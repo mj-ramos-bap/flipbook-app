@@ -522,34 +522,42 @@ export default function FlipbookCanvas({
   }, [searchQuery, searchResults, searchPerformed, searchIndex, performSearch, goToSearchResult]);
 
   // ── Fullscreen ────────────────────────────────────────────────────
-  // On enter: re-init PageFlip using the actual screen dimensions so the
-  // book fills the display rather than being CSS-scaled from iframe size.
-  // On exit: re-init back to the iframe/window dimensions.
-  // Both directions use a single controlled re-init (via resizeKey) so the
-  // browser's own resize event can't fire a competing second re-init.
+  // On enter: re-init PageFlip after the browser has expanded window.innerWidth/Height
+  //   to screen size, so the book fills the display rather than being CSS-scaled from
+  //   the small iframe dimensions.
+  // On exit: wait for the browser's resize event that fires once window.innerWidth/Height
+  //   have actually reverted to the iframe/window dimensions, then re-init. Using a
+  //   fixed timeout risks re-initing while the viewport is still at screen size, which
+  //   leaves the book overflowing the iframe.
   useEffect(() => {
     const onFSChange = () => {
       const entering = !!document.fullscreenElement;
       isFullscreenRef.current = entering;
-      fsZoomRef.current = 1; // reset — re-init will use real dimensions, no CSS scaling needed
+      fsZoomRef.current = 1;
+      setIsFullscreen(entering);
 
       if (entering) {
-        // Clear the flag set by toggleFullscreen() so normal guards resume.
         fsTransitionRef.current = false;
-        // Defer the re-init slightly so the browser finishes the fullscreen
-        // transition and window.innerWidth/Height reflect the screen size.
+        // Defer so the browser finishes expanding the viewport to screen size.
         setTimeout(() => setResizeKey(k => k + 1), 300);
       } else {
-        // Keep fsTransitionRef = true (already set by toggleFullscreen before
-        // exitFullscreen) so the browser's resize event cannot trigger its own
-        // re-init and race with ours. Clear it as part of our single re-init.
-        setTimeout(() => {
+        // Keep fsTransitionRef = true (set by toggleFullscreen before exitFullscreen)
+        // to block the normal resize handler from firing a competing re-init.
+        // Wait for the viewport-resize event — that's the reliable signal that
+        // window.innerWidth/Height have reverted to the iframe/window dimensions.
+        let done = false;
+        const settle = () => {
+          if (done) return;
+          done = true;
+          window.removeEventListener("resize", settle);
+          clearTimeout(fallback);
           fsTransitionRef.current = false;
           setResizeKey(k => k + 1);
-        }, 300);
+        };
+        window.addEventListener("resize", settle);
+        // Fallback in case the resize event doesn't fire (e.g. same-size window).
+        const fallback = setTimeout(settle, 600);
       }
-
-      setIsFullscreen(entering);
     };
     document.addEventListener("fullscreenchange", onFSChange);
     return () => document.removeEventListener("fullscreenchange", onFSChange);
