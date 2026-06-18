@@ -49,9 +49,11 @@ export default function FlipbookCanvas({
   const fsTransitionRef    = useRef(false); // set BEFORE exitFullscreen() so resize is blocked immediately
   const fsZoomRef          = useRef(1);     // current fullscreen CSS-zoom factor (used by renderPdfPage for quality)
   const isDoubleRef        = useRef(pagesPerView === "double");
-  const goToPageRef   = useRef<(p: number) => void>(() => {});
-  const pageTextsRef  = useRef<Map<number, string>>(new Map());
-  const savedPageRef  = useRef(1); // preserves page when re-initializing on mode toggle
+  const goToPageRef        = useRef<(p: number) => void>(() => {});
+  const pageTextsRef       = useRef<Map<number, string>>(new Map());
+  const savedPageRef       = useRef(1); // preserves page when re-initializing on mode toggle
+  const renderPdfPageRef   = useRef<(pageNum: number, forceRender?: boolean) => Promise<void>>(() => Promise.resolve());
+  const totalPagesRef      = useRef(0);
 
   // ── State ─────────────────────────────────────────────────────────
   const [totalPages,     setTotalPages]     = useState(0);
@@ -67,8 +69,9 @@ export default function FlipbookCanvas({
   const [isFullscreen,   setIsFullscreen]   = useState(false);
   const [bookVisible,    setBookVisible]    = useState(true); // drives opacity fade during FS transitions
   const [isDouble,       setIsDouble]       = useState(pagesPerView === "double");
-  // Keep isDoubleRef in sync so fullscreenchange handler (a closure) can read the current value
+  // Keep refs in sync so fullscreenchange handler (a [] closure) can read current values
   useEffect(() => { isDoubleRef.current = isDouble; }, [isDouble]);
+  useEffect(() => { totalPagesRef.current = totalPages; }, [totalPages]);
   // Fade the book back in whenever a re-init completes (bookReady flips to true)
   useEffect(() => { if (bookReady) setBookVisible(true); }, [bookReady]);
   const [soundEnabled,   setSoundEnabled]   = useState(enablePageSound);
@@ -222,6 +225,8 @@ export default function FlipbookCanvas({
       if (rc) await page.render({ canvasContext: rc, viewport: sv }).promise;
     } catch { renderedRef.current.delete(pageNum); }
   }, []);
+  // Keep ref in sync so fullscreenchange handler (a [] closure) can call it
+  useEffect(() => { renderPdfPageRef.current = renderPdfPage; }, [renderPdfPage]);
 
   // ── PageFlip init ─────────────────────────────────────────────────
   useEffect(() => {
@@ -536,20 +541,30 @@ export default function FlipbookCanvas({
     const onFSChange = () => {
       const entering = !!document.fullscreenElement;
       isFullscreenRef.current = entering;
-      fsZoomRef.current = 1;
       setIsFullscreen(entering);
 
       if (entering) {
         fsTransitionRef.current = false;
-        // window.innerWidth/Height update synchronously with fullscreenchange,
-        // so a single tick is enough before re-init reads them.
-        setTimeout(() => setResizeKey(k => k + 1), 50);
+        // Calculate the scale factor the CSS fsZoom will apply, so re-renders
+        // use the matching quality. No PageFlip re-init — CSS handles the size.
+        const dw = displayWRef.current || 600;
+        const dh = displayHRef.current || 800;
+        const fsZoom = Math.min(
+          (window.innerWidth - 40) / (dw * (isDoubleRef.current ? 2 : 1)),
+          (window.innerHeight - 96) / dh,
+          2.5
+        );
+        fsZoomRef.current = fsZoom;
+        // Background re-render visible pages at the boosted quality
+        const cur = (pageFlipRef.current?.getCurrentPageIndex?.() ?? 0) + 1;
+        const spread = isDoubleRef.current ? 2 : 1;
+        for (let p = Math.max(1, cur); p <= Math.min(totalPagesRef.current, cur + spread); p++) {
+          renderPdfPageRef.current(p, true);
+        }
       } else {
-        // Keep fsTransitionRef = true (set by toggleFullscreen before exitFullscreen)
-        // to block the normal resize handler from firing a competing re-init.
-        // Wait for the viewport-resize event — that's the reliable signal that
-        // window.innerWidth/Height have reverted to the iframe/window dimensions.
-        setBookVisible(false);
+        fsZoomRef.current = 1;
+        // Wait for the viewport-revert resize event before re-enabling normal
+        // resize detection (fsTransitionRef was set in toggleFullscreen).
         let done = false;
         const settle = () => {
           if (done) return;
@@ -557,10 +572,14 @@ export default function FlipbookCanvas({
           window.removeEventListener("resize", settle);
           clearTimeout(fallback);
           fsTransitionRef.current = false;
-          setResizeKey(k => k + 1);
+          // Background re-render at normal quality
+          const cur = (pageFlipRef.current?.getCurrentPageIndex?.() ?? 0) + 1;
+          const spread = isDoubleRef.current ? 2 : 1;
+          for (let p = Math.max(1, cur); p <= Math.min(totalPagesRef.current, cur + spread); p++) {
+            renderPdfPageRef.current(p, true);
+          }
         };
         window.addEventListener("resize", settle);
-        // Fallback in case the resize event doesn't fire (e.g. same-size window).
         const fallback = setTimeout(settle, 600);
       }
     };
@@ -571,11 +590,9 @@ export default function FlipbookCanvas({
   const toggleFullscreen = () => {
     fsTransitionRef.current = true;
     if (!document.fullscreenElement) {
-      // Entering fullscreen: hide the small iframe-sized book until re-init at screen size
-      setBookVisible(false);
       containerRef.current?.requestFullscreen?.();
     } else {
-      // Exiting: keep book visible — the re-init will snap to the correct size
+      // Exiting: CSS scale resets to 1 when isFullscreen becomes false
       // with no transition (bookReady=false suppresses the transform transition)
       document.exitFullscreen?.();
     }
