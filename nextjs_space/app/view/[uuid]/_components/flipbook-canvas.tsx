@@ -569,10 +569,13 @@ export default function FlipbookCanvas({
 
   const toggleFullscreen = () => {
     fsTransitionRef.current = true;
-    setBookVisible(false); // fade out immediately so the wrong-size flash is hidden
     if (!document.fullscreenElement) {
+      // Entering fullscreen: hide the small iframe-sized book until re-init at screen size
+      setBookVisible(false);
       containerRef.current?.requestFullscreen?.();
     } else {
+      // Exiting: keep book visible — the re-init will snap to the correct size
+      // with no transition (bookReady=false suppresses the transform transition)
       document.exitFullscreen?.();
     }
   };
@@ -814,7 +817,9 @@ export default function FlipbookCanvas({
               innerStyle = {
                 transform: `translateX(${coverShift * totalZoom}px) scale(${totalZoom})`,
                 transformOrigin: 'center center',
-                transition: 'transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94)',
+                // Suppress transition during re-init so the book snaps to the new
+                // size instantly rather than sliding from the old position.
+                transition: bookReady ? 'transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94)' : 'none',
               };
             }
 
