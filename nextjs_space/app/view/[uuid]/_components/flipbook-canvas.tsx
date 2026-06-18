@@ -343,14 +343,19 @@ export default function FlipbookCanvas({
         }
       });
 
-      setBookReady(true);
-
-      // Restore page position after a mode-toggle re-init
+      // Restore page position BEFORE marking the book as ready so the user
+      // never sees the cover page flash between fullscreen/minimize transitions.
       const pageToRestore = savedPageRef.current;
       if (pageToRestore > 1 && !cancelled) {
         setTimeout(() => {
-          if (!cancelled) goToPageRef.current(pageToRestore);
+          if (!cancelled) {
+            goToPageRef.current(pageToRestore);
+            // Give PageFlip one frame to process the flip before revealing the book
+            setTimeout(() => { if (!cancelled) setBookReady(true); }, 50);
+          }
         }, 150);
+      } else {
+        setBookReady(true);
       }
     })();
 
