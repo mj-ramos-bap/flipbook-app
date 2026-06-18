@@ -65,9 +65,12 @@ export default function FlipbookCanvas({
   const [zoom,           setZoom]           = useState(1);
   const [resizeKey,      setResizeKey]      = useState(0); // bumped on window resize → re-init PageFlip
   const [isFullscreen,   setIsFullscreen]   = useState(false);
+  const [bookVisible,    setBookVisible]    = useState(true); // drives opacity fade during FS transitions
   const [isDouble,       setIsDouble]       = useState(pagesPerView === "double");
   // Keep isDoubleRef in sync so fullscreenchange handler (a closure) can read the current value
   useEffect(() => { isDoubleRef.current = isDouble; }, [isDouble]);
+  // Fade the book back in whenever a re-init completes (bookReady flips to true)
+  useEffect(() => { if (bookReady) setBookVisible(true); }, [bookReady]);
   const [soundEnabled,   setSoundEnabled]   = useState(enablePageSound);
   const [thumbnails,     setThumbnails]     = useState<string[]>([]);
   const [showThumbnails, setShowThumbnails] = useState(false);
@@ -538,8 +541,9 @@ export default function FlipbookCanvas({
 
       if (entering) {
         fsTransitionRef.current = false;
-        // Defer so the browser finishes expanding the viewport to screen size.
-        setTimeout(() => setResizeKey(k => k + 1), 300);
+        // window.innerWidth/Height update synchronously with fullscreenchange,
+        // so a single tick is enough before re-init reads them.
+        setTimeout(() => setResizeKey(k => k + 1), 50);
       } else {
         // Keep fsTransitionRef = true (set by toggleFullscreen before exitFullscreen)
         // to block the normal resize handler from firing a competing re-init.
@@ -564,9 +568,8 @@ export default function FlipbookCanvas({
   }, []);
 
   const toggleFullscreen = () => {
-    // Set SYNCHRONOUSLY before requestFullscreen/exitFullscreen so that any
-    // resize events the browser fires during the transition are blocked immediately.
     fsTransitionRef.current = true;
+    setBookVisible(false); // fade out immediately so the wrong-size flash is hidden
     if (!document.fullscreenElement) {
       containerRef.current?.requestFullscreen?.();
     } else {
@@ -746,7 +749,8 @@ export default function FlipbookCanvas({
         )}
 
         {/* ── Book area ───────────────────────────────────────── */}
-        <div className="flex-1 flex items-center justify-center overflow-hidden relative">
+        <div className="flex-1 flex items-center justify-center overflow-hidden relative"
+          style={{ opacity: bookVisible ? 1 : 0, transition: 'opacity 0.18s ease' }}>
 
           {/* Arrow nav — kept for accessibility; PageFlip also handles drag/swipe */}
           <button onClick={prevPage} disabled={currentPage <= 1}
