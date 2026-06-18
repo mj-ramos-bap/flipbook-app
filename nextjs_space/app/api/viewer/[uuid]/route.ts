@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getFileUrl } from "@/lib/s3";
 import { verifyUuid } from "@/lib/link-token";
+import { generateGcsSignedUrl } from "@/lib/gcs-auth";
+import { getBucketConfig } from "@/lib/aws-config";
 
 export async function GET(req: Request, { params }: { params: { uuid: string } }) {
   try {
@@ -35,8 +37,12 @@ export async function GET(req: Request, { params }: { params: { uuid: string } }
       }
     }
 
-    // Serve PDF via server-side proxy to avoid CORS issues
-    const pdfUrl = `/api/viewer/${flipbook.uuid}/pdf`;
+    // Try to serve PDF via a short-lived GCS signed URL (browser downloads directly
+    // from GCS, bypassing Cloud Run — faster and supports range requests natively).
+    // Falls back to the server-side proxy for local dev where ADC is unavailable.
+    const { bucketName } = getBucketConfig();
+    const signedUrl = await generateGcsSignedUrl(bucketName, flipbook.cloudStoragePath);
+    const pdfUrl = signedUrl ?? `/api/viewer/${flipbook.uuid}/pdf`;
 
     // Get branding
     const branding = await prisma.brandingSettings.findFirst();

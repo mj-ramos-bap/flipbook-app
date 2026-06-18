@@ -15,17 +15,22 @@ export async function GET(req: Request, { params }: { params: { uuid: string } }
     const { bucketName } = getBucketConfig();
     let upstream: Response | null = null;
 
+    // Forward range header so pdfjs can do partial/progressive loading
+    const rangeHeader = req.headers.get("range");
+    const upstreamHeaders: Record<string, string> = {};
+    if (rangeHeader) upstreamHeaders["Range"] = rangeHeader;
+
     // Try ADC first (works on Cloud Run without HMAC)
     const token = await getGcsToken();
     if (token) {
       const gcsUrl = `https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(bucketName)}/o/${encodeURIComponent(flipbook.cloudStoragePath)}?alt=media`;
-      upstream = await fetch(gcsUrl, { headers: { Authorization: `Bearer ${token}` } });
+      upstream = await fetch(gcsUrl, { headers: { Authorization: `Bearer ${token}`, ...upstreamHeaders } });
     }
 
     // Fallback: HMAC presigned URL (local dev)
     if (!upstream || !upstream.ok) {
       const signedUrl = await getFileUrl(flipbook.cloudStoragePath, false);
-      upstream = await fetch(signedUrl);
+      upstream = await fetch(signedUrl, { headers: upstreamHeaders });
     }
 
     if (!upstream || !upstream.ok) {
@@ -33,15 +38,22 @@ export async function GET(req: Request, { params }: { params: { uuid: string } }
       return NextResponse.json({ error: errText }, { status: upstream?.status ?? 500 });
     }
 
+    const responseHeaders: Record<string, string> = {
+      "Content-Type": "application/pdf",
+      "Content-Disposition": "inline",
+      "Cache-Control": "private, max-age=3600",
+      "Accept-Ranges": "bytes",
+    };
+    if (upstream.headers.get("content-length")) {
+      responseHeaders["Content-Length"] = upstream.headers.get("content-length")!;
+    }
+    if (upstream.headers.get("content-range")) {
+      responseHeaders["Content-Range"] = upstream.headers.get("content-range")!;
+    }
+
     return new Response(upstream.body, {
-      headers: {
-        "Content-Type": "application/pdf",
-        "Content-Disposition": "inline",
-        "Cache-Control": "private, max-age=3600",
-        ...(upstream.headers.get("content-length")
-          ? { "Content-Length": upstream.headers.get("content-length")! }
-          : {}),
-      },
+      status: upstream.status, // pass through 206 Partial Content for range requests
+      headers: responseHeaders,
     });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Server error" }, { status: 500 });

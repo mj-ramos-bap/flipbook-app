@@ -23,3 +23,65 @@ export async function getGcsToken(): Promise<string | null> {
     return null;
   }
 }
+
+// Cache the service account email (stable for the lifetime of the container)
+let _serviceAccountEmail: string | null = null;
+
+async function getServiceAccountEmail(): Promise<string | null> {
+  if (_serviceAccountEmail) return _serviceAccountEmail;
+  try {
+    const res = await fetch(
+      "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email",
+      { headers: { "Metadata-Flavor": "Google" } }
+    );
+    if (!res.ok) return null;
+    _serviceAccountEmail = (await res.text()).trim();
+    return _serviceAccountEmail;
+  } catch {
+    return null;
+  }
+}
+
+// Generates a short-lived GCS V2 signed URL so the browser can download directly
+// from GCS without routing through Cloud Run. Falls back to null outside GCP.
+export async function generateGcsSignedUrl(
+  bucketName: string,
+  objectPath: string,
+  expiresInSeconds = 900 // 15 minutes
+): Promise<string | null> {
+  try {
+    const [token, serviceAccount] = await Promise.all([
+      getGcsToken(),
+      getServiceAccountEmail(),
+    ]);
+    if (!token || !serviceAccount) return null;
+
+    const expiry = Math.floor(Date.now() / 1000) + expiresInSeconds;
+    // GCS V2 canonical string to sign — objectPath must NOT be URL-encoded here
+    const stringToSign = `GET\n\n\n${expiry}\n/${bucketName}/${objectPath}`;
+    const payload = Buffer.from(stringToSign).toString("base64");
+
+    const signRes = await fetch(
+      `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${encodeURIComponent(serviceAccount)}:signBlob`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ payload }),
+      }
+    );
+    if (!signRes.ok) return null;
+    const { signedBlob } = await signRes.json();
+    if (!signedBlob) return null;
+
+    // Build the signed URL — objectPath segments are URL-encoded in the path
+    const encodedPath = objectPath.split("/").map(encodeURIComponent).join("/");
+    const params = new URLSearchParams({
+      GoogleAccessId: serviceAccount,
+      Expires: String(expiry),
+      Signature: signedBlob, // already base64; URLSearchParams handles URL-encoding
+    });
+    return `https://storage.googleapis.com/${encodeURIComponent(bucketName)}/${encodedPath}?${params.toString()}`;
+  } catch {
+    return null;
+  }
+}
