@@ -54,6 +54,7 @@ export default function FlipbookCanvas({
   const savedPageRef       = useRef(1); // preserves page when re-initializing on mode toggle
   const renderPdfPageRef   = useRef<(pageNum: number, forceRender?: boolean) => Promise<void>>(() => Promise.resolve());
   const totalPagesRef      = useRef(0);
+  const reinitDuringFSRef  = useRef(false); // mode/resize re-init happened while fullscreen
 
   // ── State ─────────────────────────────────────────────────────────
   const [totalPages,     setTotalPages]     = useState(0);
@@ -231,6 +232,9 @@ export default function FlipbookCanvas({
   // ── PageFlip init ─────────────────────────────────────────────────
   useEffect(() => {
     if (!pdfLoaded || pageNatW === 0 || totalPages === 0) return;
+    // Track if a re-init happens while fullscreen so we can force a clean
+    // re-init at iframe dimensions on exit.
+    if (isFullscreenRef.current) reinitDuringFSRef.current = true;
 
     const toolbarH = 100;
     const availH   = (window.innerHeight - toolbarH) * 0.90;
@@ -322,7 +326,7 @@ export default function FlipbookCanvas({
         clickEventForward:  true,
         useMouseEvents:     true,
         swipeDistance:      30,
-        showPageCorners:    true,
+        showPageCorners:    isDouble,
         disableFlipByClick: false,
         startPage:          Math.max(0, savedPageRef.current - 1),
       });
@@ -551,8 +555,7 @@ export default function FlipbookCanvas({
         const dh = displayHRef.current || 800;
         const fsZoom = Math.min(
           (window.innerWidth - 40) / (dw * (isDoubleRef.current ? 2 : 1)),
-          (window.innerHeight - 96) / dh,
-          2.5
+          (window.innerHeight - 96) / dh
         );
         fsZoomRef.current = fsZoom;
         // Background re-render visible pages at the boosted quality
@@ -572,11 +575,19 @@ export default function FlipbookCanvas({
           window.removeEventListener("resize", settle);
           clearTimeout(fallback);
           fsTransitionRef.current = false;
-          // Background re-render at normal quality
-          const cur = (pageFlipRef.current?.getCurrentPageIndex?.() ?? 0) + 1;
-          const spread = isDoubleRef.current ? 2 : 1;
-          for (let p = Math.max(1, cur); p <= Math.min(totalPagesRef.current, cur + spread); p++) {
-            renderPdfPageRef.current(p, true);
+          if (reinitDuringFSRef.current) {
+            // Mode or resize re-init happened during fullscreen, so displayW/H are
+            // screen-sized. Force a clean re-init at iframe dimensions.
+            reinitDuringFSRef.current = false;
+            setBookVisible(false);
+            setResizeKey(k => k + 1);
+          } else {
+            // CSS-only exit — just re-render visible pages at normal quality.
+            const cur = (pageFlipRef.current?.getCurrentPageIndex?.() ?? 0) + 1;
+            const spread = isDoubleRef.current ? 2 : 1;
+            for (let p = Math.max(1, cur); p <= Math.min(totalPagesRef.current, cur + spread); p++) {
+              renderPdfPageRef.current(p, true);
+            }
           }
         };
         window.addEventListener("resize", settle);
@@ -805,8 +816,7 @@ export default function FlipbookCanvas({
             const fsZoom = isFullscreen && displayW > 0 && displayH > 0
               ? Math.min(
                   (window.innerWidth - 40) / (displayW * (isDouble ? 2 : 1)),
-                  (window.innerHeight - 96) / displayH,
-                  2.5
+                  (window.innerHeight - 96) / displayH
                 )
               : 1;
             const totalZoom = zoom * fsZoom;
