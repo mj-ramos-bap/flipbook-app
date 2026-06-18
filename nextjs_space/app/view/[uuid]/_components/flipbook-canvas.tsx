@@ -57,6 +57,8 @@ export default function FlipbookCanvas({
   const reinitDuringFSRef  = useRef(false); // mode/resize re-init happened while fullscreen
 
   // ── State ─────────────────────────────────────────────────────────
+  const isInIframe = typeof window !== "undefined" && window.self !== window.top;
+
   const [totalPages,     setTotalPages]     = useState(0);
   const [currentPage,    setCurrentPage]    = useState(1);
   const [pdfLoaded,      setPdfLoaded]      = useState(false);
@@ -635,8 +637,8 @@ export default function FlipbookCanvas({
             }}
             className={`w-full text-left py-2 pr-3 rounded transition-all flex items-start gap-2 group ${
               isActive
-                ? "bg-indigo-600/25 text-white"
-                : "text-gray-300 hover:bg-gray-700/70 hover:text-white"
+                ? "bg-indigo-600/25 text-gray-900"
+                : "text-gray-600 hover:bg-gray-200 hover:text-gray-800"
             }`}
             style={{ paddingLeft: `${10 + depth * 14}px` }}>
             {/* Dot indicator */}
@@ -658,9 +660,9 @@ export default function FlipbookCanvas({
   // ── Loading screen ────────────────────────────────────────────────
   if (!pdfLoaded) {
     return (
-      <div className="h-screen flex flex-col items-center justify-center bg-gray-900">
+      <div className="h-screen flex flex-col items-center justify-center bg-gray-100">
         <Loader2 className="w-10 h-10 animate-spin mb-4" style={{ color: primaryColor }} />
-        <p className="text-sm text-gray-400">{branding?.loadingText ?? "Loading your flipbook..."}</p>
+        <p className="text-sm text-gray-500">{branding?.loadingText ?? "Loading your flipbook..."}</p>
       </div>
     );
   }
@@ -668,42 +670,42 @@ export default function FlipbookCanvas({
   // ── Render ────────────────────────────────────────────────────────
   return (
     <div ref={containerRef}
-      className="h-screen flex flex-col bg-gray-900 relative overflow-hidden select-none"
+      className="h-screen flex flex-col bg-gray-100 relative overflow-hidden select-none"
       onCopy={e => e.preventDefault()} onCut={e => e.preventDefault()}>
 
       {/* ── Top bar ─────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between px-3 py-2 bg-gray-900/95 backdrop-blur border-b border-gray-800 z-20 flex-shrink-0">
+      <div className="flex items-center justify-between px-3 py-2 bg-gray-100/98 backdrop-blur border-b border-gray-300 z-20 flex-shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           {branding?.logoUrl ? (
             <div className="relative w-7 h-7 flex-shrink-0">
               <Image src={branding.logoUrl} alt="Logo" fill className="object-contain" />
             </div>
           ) : (
-            <BookOpen className="w-5 h-5 text-white flex-shrink-0" />
+            <BookOpen className="w-5 h-5 text-gray-700 flex-shrink-0" />
           )}
-          <span className="text-white text-sm font-medium truncate">{title}</span>
+          <span className="text-gray-800 text-sm font-medium truncate">{title}</span>
         </div>
         <div className="flex items-center gap-1">
           {enablePageSound && (
-            <Button variant="ghost" size="icon" className="text-gray-300 hover:text-white h-8 w-8"
+            <Button variant="ghost" size="icon" className="text-gray-600 hover:text-gray-800 h-8 w-8"
               onClick={() => setSoundEnabled(s => !s)} title={soundEnabled ? "Mute" : "Unmute"}>
               {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
             </Button>
           )}
-          {enableShare && (
-            <Button variant="ghost" size="icon" className="text-gray-300 hover:text-white h-8 w-8"
+          {enableShare && !isInIframe && (
+            <Button variant="ghost" size="icon" className="text-gray-600 hover:text-gray-800 h-8 w-8"
               onClick={handleShare} title="Share">
               <Share2 className="w-4 h-4" />
             </Button>
           )}
           {enablePrint && (
-            <Button variant="ghost" size="icon" className="text-gray-300 hover:text-white h-8 w-8"
+            <Button variant="ghost" size="icon" className="text-gray-600 hover:text-gray-800 h-8 w-8"
               onClick={() => window.print()} title="Print">
               <Printer className="w-4 h-4" />
             </Button>
           )}
           {enableDownload && (
-            <Button variant="ghost" size="icon" className="text-gray-300 hover:text-white h-8 w-8"
+            <Button variant="ghost" size="icon" className="text-gray-600 hover:text-gray-800 h-8 w-8"
               onClick={() => {
                 const a = document.createElement("a");
                 a.href = pdfUrl;
@@ -723,18 +725,18 @@ export default function FlipbookCanvas({
 
         {/* Thumbnails sidebar */}
         {showThumbnails && (
-          <div className="w-48 bg-gray-800 border-r border-gray-700 overflow-y-auto z-10 flex-shrink-0">
+          <div className="w-48 bg-gray-200 border-r border-gray-300 overflow-y-auto z-10 flex-shrink-0">
             <div className="p-2 space-y-2">
               {thumbnails.map((thumb, i) => (
                 <button key={i} onClick={() => goToPageRef.current(i + 1)}
                   className={`w-full rounded-lg overflow-hidden border-2 transition-all ${
-                    currentPage === i + 1 ? "border-indigo-500" : "border-transparent hover:border-gray-600"
+                    currentPage === i + 1 ? "border-indigo-500" : "border-transparent hover:border-gray-300"
                   }`}>
                   {thumb
                     ? <img src={thumb} alt={`Page ${i + 1}`} className="w-full" />
-                    : <div className="aspect-[3/4] bg-gray-700 flex items-center justify-center text-gray-400 text-xs">Page {i + 1}</div>
+                    : <div className="aspect-[3/4] bg-gray-300 flex items-center justify-center text-gray-500 text-xs">Page {i + 1}</div>
                   }
-                  <p className="text-xs text-gray-400 py-1">{i + 1}</p>
+                  <p className="text-xs text-gray-500 py-1">{i + 1}</p>
                 </button>
               ))}
             </div>
@@ -743,15 +745,15 @@ export default function FlipbookCanvas({
 
         {/* TOC sidebar — always rendered when open; shows helpful message if PDF has no outline */}
         {showToc && (
-          <div className="w-72 bg-gray-900 border-r border-gray-700 z-10 flex-shrink-0 flex flex-col"
+          <div className="w-72 bg-gray-100 border-r border-gray-300 z-10 flex-shrink-0 flex flex-col"
             style={{ minHeight: 0 }}>
             {/* Header */}
-            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700 flex-shrink-0">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-300 flex-shrink-0">
               <div className="flex items-center gap-2">
                 <List className="w-4 h-4 text-indigo-400" />
-                <h3 className="text-white text-sm font-semibold">Table of Contents</h3>
+                <h3 className="text-gray-900 text-sm font-semibold">Table of Contents</h3>
               </div>
-              <Button variant="ghost" size="icon" className="text-gray-400 hover:text-white h-6 w-6"
+              <Button variant="ghost" size="icon" className="text-gray-500 hover:text-gray-800 h-6 w-6"
                 onClick={() => setShowToc(false)}>
                 <X className="w-3 h-3" />
               </Button>
@@ -766,7 +768,7 @@ export default function FlipbookCanvas({
               /* PDF loaded but no outline found */
               <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
                 <List className="w-10 h-10 text-gray-600 mb-3" />
-                <p className="text-sm text-gray-400 font-medium">No outline found</p>
+                <p className="text-sm text-gray-500 font-medium">No outline found</p>
                 <p className="text-xs text-gray-500 mt-1 leading-relaxed">
                   This PDF doesn't have built-in bookmarks. Use the thumbnail panel or page jump to navigate.
                 </p>
@@ -785,11 +787,11 @@ export default function FlipbookCanvas({
 
           {/* Arrow nav — kept for accessibility; PageFlip also handles drag/swipe */}
           <button onClick={prevPage} disabled={currentPage <= 1}
-            className="absolute left-2 top-1/2 -translate-y-1/2 z-10 w-10 h-10 rounded-full bg-black/40 hover:bg-black/60 flex items-center justify-center text-white disabled:opacity-20 transition-all">
+            className="absolute left-2 top-1/2 -translate-y-1/2 z-10 w-10 h-10 rounded-full bg-gray-700/60 hover:bg-gray-700/80 flex items-center justify-center text-gray-900 disabled:opacity-20 transition-all">
             <ChevronLeft className="w-6 h-6" />
           </button>
           <button onClick={nextPage} disabled={currentPage >= totalPages}
-            className="absolute right-2 top-1/2 -translate-y-1/2 z-10 w-10 h-10 rounded-full bg-black/40 hover:bg-black/60 flex items-center justify-center text-white disabled:opacity-20 transition-all">
+            className="absolute right-2 top-1/2 -translate-y-1/2 z-10 w-10 h-10 rounded-full bg-gray-700/60 hover:bg-gray-700/80 flex items-center justify-center text-gray-900 disabled:opacity-20 transition-all">
             <ChevronRight className="w-6 h-6" />
           </button>
 
@@ -804,7 +806,7 @@ export default function FlipbookCanvas({
                 width: "2px",
                 transform: "translateX(-50%)",
                 zIndex: 0,
-                background: "rgba(0,0,0,0.35)",
+                background: "rgba(0,0,0,0.15)",
               }}
             />
           )}
@@ -870,31 +872,31 @@ export default function FlipbookCanvas({
 
         {/* Search overlay */}
         {showSearch && (
-          <div className="absolute top-12 right-4 bg-gray-800 rounded-lg shadow-xl p-3 z-30 w-80">
+          <div className="absolute top-12 right-4 bg-white rounded-lg shadow-xl p-3 z-30 w-80 border border-gray-200">
             <div className="flex items-center gap-1">
               <Input value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
                 onKeyDown={handleSearchKeyDown}
                 placeholder="Search in document…"
-                className="bg-gray-700 border-gray-600 text-white text-sm h-8 flex-1" autoFocus />
+                className="bg-gray-50 border-gray-300 text-gray-900 text-sm h-8 flex-1" autoFocus />
               {searchPerformed && searchResults.length > 0 && (
                 <>
-                  <Button variant="ghost" size="icon" className="text-gray-400 h-8 w-8 flex-shrink-0"
+                  <Button variant="ghost" size="icon" className="text-gray-500 h-8 w-8 flex-shrink-0"
                     onClick={() => goToSearchResult(searchIndex - 1)}>
                     <ChevronUp className="w-4 h-4" />
                   </Button>
-                  <Button variant="ghost" size="icon" className="text-gray-400 h-8 w-8 flex-shrink-0"
+                  <Button variant="ghost" size="icon" className="text-gray-500 h-8 w-8 flex-shrink-0"
                     onClick={() => goToSearchResult(searchIndex + 1)}>
                     <ChevronDown className="w-4 h-4" />
                   </Button>
                 </>
               )}
-              <Button variant="ghost" size="icon" className="text-gray-400 h-8 w-8 flex-shrink-0"
+              <Button variant="ghost" size="icon" className="text-gray-500 h-8 w-8 flex-shrink-0"
                 onClick={() => { setShowSearch(false); setSearchQuery(""); setSearchResults([]); setSearchPerformed(false); }}>
                 <X className="w-4 h-4" />
               </Button>
             </div>
             {isSearching && (
-              <div className="flex items-center gap-2 mt-2 text-xs text-gray-400">
+              <div className="flex items-center gap-2 mt-2 text-xs text-gray-500">
                 <Loader2 className="w-3 h-3 animate-spin" /> Searching all pages…
               </div>
             )}
@@ -903,14 +905,14 @@ export default function FlipbookCanvas({
                 {searchResults.length === 0
                   ? <p className="text-xs text-gray-500">No results found</p>
                   : <>
-                      <p className="text-xs text-gray-400 mb-1">
+                      <p className="text-xs text-gray-500 mb-1">
                         {searchIndex + 1} of {searchResults.length} result{searchResults.length !== 1 ? "s" : ""}
                       </p>
                       <div className="max-h-40 overflow-y-auto space-y-1">
                         {searchResults.map((r, i) => (
                           <button key={i} onClick={() => goToSearchResult(i)}
                             className={`w-full text-left text-xs px-2 py-1.5 rounded transition-colors ${
-                              i === searchIndex ? "bg-indigo-600/40 text-white" : "text-gray-300 hover:bg-gray-700"
+                              i === searchIndex ? "bg-indigo-600/20 text-gray-900" : "text-gray-600 hover:bg-gray-100"
                             }`}>
                             <span className="text-gray-500 mr-1">p.{r.page}</span>{r.snippet}
                           </button>
@@ -928,47 +930,47 @@ export default function FlipbookCanvas({
       </div>
 
       {/* ── Bottom toolbar ───────────────────────────────────────── */}
-      <div className="flex items-center justify-between px-3 py-2 bg-gray-900/95 backdrop-blur border-t border-gray-800 z-20 flex-shrink-0">
+      <div className="flex items-center justify-between px-3 py-2 bg-gray-100/98 backdrop-blur border-t border-gray-300 z-20 flex-shrink-0">
         <div className="flex items-center gap-1">
           <Button variant="ghost" size="icon"
-            className={`h-8 w-8 ${showThumbnails ? "text-white bg-gray-700" : "text-gray-300 hover:text-white"}`}
+            className={`h-8 w-8 ${showThumbnails ? "text-gray-900 bg-gray-300" : "text-gray-600 hover:text-gray-800 hover:bg-gray-200"}`}
             onClick={() => { setShowThumbnails(s => !s); if (!showThumbnails) setShowToc(false); }}
             title="Thumbnails">
             <Grid3X3 className="w-4 h-4" />
           </Button>
           <Button variant="ghost" size="icon"
-            className={`h-8 w-8 ${showToc ? "text-white bg-gray-700" : "text-gray-300 hover:text-white"}`}
+            className={`h-8 w-8 ${showToc ? "text-gray-900 bg-gray-300" : "text-gray-600 hover:text-gray-800 hover:bg-gray-200"}`}
             onClick={() => { setShowToc(s => !s); if (!showToc) setShowThumbnails(false); }}
             title={hasToc ? "Table of Contents" : "Table of Contents (none in PDF)"}>
             <List className="w-4 h-4" />
           </Button>
           <Button variant="ghost" size="icon"
-            className="text-gray-300 hover:text-white h-8 w-8"
+            className="text-gray-600 hover:text-gray-800 h-8 w-8"
             onClick={() => setShowSearch(s => !s)} title="Search">
             <Search className="w-4 h-4" />
           </Button>
         </div>
 
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="icon" className="text-gray-300 hover:text-white h-8 w-8"
+          <Button variant="ghost" size="icon" className="text-gray-600 hover:text-gray-800 h-8 w-8"
             onClick={() => goToPageRef.current(1)} title="First page">
             <ChevronFirst className="w-4 h-4" />
           </Button>
-          <Button variant="ghost" size="icon" className="text-gray-300 hover:text-white h-8 w-8"
+          <Button variant="ghost" size="icon" className="text-gray-600 hover:text-gray-800 h-8 w-8"
             onClick={prevPage} disabled={currentPage <= 1}>
             <ChevronLeft className="w-4 h-4" />
           </Button>
           <form onSubmit={handleJumpPage} className="flex items-center gap-1">
             <Input value={jumpPage} onChange={e => setJumpPage(e.target.value)}
               placeholder={String(currentPage)}
-              className="w-12 h-7 text-center bg-gray-800 border-gray-700 text-white text-xs px-1" />
-            <span className="text-gray-400 text-xs">/ {totalPages}</span>
+              className="w-12 h-7 text-center bg-white border-gray-300 text-gray-900 text-xs px-1" />
+            <span className="text-gray-500 text-xs">/ {totalPages}</span>
           </form>
-          <Button variant="ghost" size="icon" className="text-gray-300 hover:text-white h-8 w-8"
+          <Button variant="ghost" size="icon" className="text-gray-600 hover:text-gray-800 h-8 w-8"
             onClick={nextPage} disabled={currentPage >= totalPages}>
             <ChevronRight className="w-4 h-4" />
           </Button>
-          <Button variant="ghost" size="icon" className="text-gray-300 hover:text-white h-8 w-8"
+          <Button variant="ghost" size="icon" className="text-gray-600 hover:text-gray-800 h-8 w-8"
             onClick={() => goToPageRef.current(totalPages)} title="Last page">
             <ChevronLast className="w-4 h-4" />
           </Button>
@@ -976,7 +978,7 @@ export default function FlipbookCanvas({
 
         <div className="flex items-center gap-1">
           {/* Zoom slider — drag left/right or use − / + buttons */}
-          <Button variant="ghost" size="icon" className="text-gray-300 hover:text-white h-8 w-8"
+          <Button variant="ghost" size="icon" className="text-gray-600 hover:text-gray-800 h-8 w-8"
             onClick={() => applyZoom(Math.max(1, zoom - 0.25))} title="Zoom out">
             <ZoomOut className="w-4 h-4" />
           </Button>
@@ -987,21 +989,21 @@ export default function FlipbookCanvas({
             className="w-24 h-1 accent-indigo-500 cursor-pointer"
             title={`Zoom: ${Math.round(zoom * 100)}%`}
           />
-          <Button variant="ghost" size="icon" className="text-gray-300 hover:text-white h-8 w-8"
+          <Button variant="ghost" size="icon" className="text-gray-600 hover:text-gray-800 h-8 w-8"
             onClick={() => applyZoom(Math.min(3, zoom + 0.25))} title="Zoom in">
             <ZoomIn className="w-4 h-4" />
           </Button>
           <button onClick={() => applyZoom(1)}
-            className="text-gray-400 hover:text-white text-xs min-w-[3rem] text-center tabular-nums">
+            className="text-gray-500 hover:text-gray-800 text-xs min-w-[3rem] text-center tabular-nums">
             {Math.round(zoom * 100)}%
           </button>
-          <div className="w-px h-5 bg-gray-700 mx-1" />
-          <Button variant="ghost" size="icon" className="text-gray-300 hover:text-white h-8 w-8"
+          <div className="w-px h-5 bg-gray-300 mx-1" />
+          <Button variant="ghost" size="icon" className="text-gray-600 hover:text-gray-800 h-8 w-8"
             onClick={() => setIsDouble(d => !d)}
             title={isDouble ? "Single page" : "Double page"}>
             <BookOpen className="w-4 h-4" />
           </Button>
-          <Button variant="ghost" size="icon" className="text-gray-300 hover:text-white h-8 w-8"
+          <Button variant="ghost" size="icon" className="text-gray-600 hover:text-gray-800 h-8 w-8"
             onClick={toggleFullscreen} title="Fullscreen">
             {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
           </Button>
