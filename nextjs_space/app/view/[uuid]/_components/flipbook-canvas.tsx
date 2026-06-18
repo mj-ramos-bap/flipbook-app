@@ -549,6 +549,7 @@ export default function FlipbookCanvas({
         // to block the normal resize handler from firing a competing re-init.
         // Wait for the viewport-resize event — that's the reliable signal that
         // window.innerWidth/Height have reverted to the iframe/window dimensions.
+        setBookVisible(false);
         let done = false;
         const settle = () => {
           if (done) return;
@@ -752,8 +753,7 @@ export default function FlipbookCanvas({
         )}
 
         {/* ── Book area ───────────────────────────────────────── */}
-        <div className="flex-1 flex items-center justify-center overflow-hidden relative"
-          style={{ opacity: bookVisible ? 1 : 0 }}>
+        <div className="flex-1 flex items-center justify-center overflow-hidden relative">
 
           {/* Arrow nav — kept for accessibility; PageFlip also handles drag/swipe */}
           <button onClick={prevPage} disabled={currentPage <= 1}
@@ -781,7 +781,8 @@ export default function FlipbookCanvas({
             />
           )}
 
-          {/* PageFlip container — shifted to visually center single cover/back pages */}
+          {/* PageFlip container — hidden until ready so page-1 never flashes */}
+          <div style={{ opacity: bookVisible ? 1 : 0 }}>
           {(() => {
             // Common zoom calculation for both modes
             const fsZoom = isFullscreen && displayW > 0 && displayH > 0
@@ -831,6 +832,7 @@ export default function FlipbookCanvas({
               </div>
             );
           })()}
+          </div>
 
           {!bookReady && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
