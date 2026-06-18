@@ -750,7 +750,7 @@ export default function FlipbookCanvas({
 
         {/* ── Book area ───────────────────────────────────────── */}
         <div className="flex-1 flex items-center justify-center overflow-hidden relative"
-          style={{ opacity: bookVisible ? 1 : 0, transition: 'opacity 0.18s ease' }}>
+          style={{ opacity: bookVisible ? 1 : 0 }}>
 
           {/* Arrow nav — kept for accessibility; PageFlip also handles drag/swipe */}
           <button onClick={prevPage} disabled={currentPage <= 1}
