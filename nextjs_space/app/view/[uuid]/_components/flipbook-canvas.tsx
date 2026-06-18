@@ -43,9 +43,12 @@ export default function FlipbookCanvas({
   const renderedRef   = useRef<Set<number>>(new Set());
   const canvasesRef   = useRef<(HTMLCanvasElement | null)[]>([]);
   const displayWRef        = useRef(0);
+  const displayHRef        = useRef(0);
   const zoomRef            = useRef(1);
   const isFullscreenRef    = useRef(false); // mirrors isFullscreen but synchronous
   const fsTransitionRef    = useRef(false); // set BEFORE exitFullscreen() so resize is blocked immediately
+  const fsZoomRef          = useRef(1);     // current fullscreen CSS-zoom factor (used by renderPdfPage for quality)
+  const isDoubleRef        = useRef(pagesPerView === "double");
   const goToPageRef   = useRef<(p: number) => void>(() => {});
   const pageTextsRef  = useRef<Map<number, string>>(new Map());
   const savedPageRef  = useRef(1); // preserves page when re-initializing on mode toggle
@@ -63,6 +66,8 @@ export default function FlipbookCanvas({
   const [resizeKey,      setResizeKey]      = useState(0); // bumped on window resize → re-init PageFlip
   const [isFullscreen,   setIsFullscreen]   = useState(false);
   const [isDouble,       setIsDouble]       = useState(pagesPerView === "double");
+  // Keep isDoubleRef in sync so fullscreenchange handler (a closure) can read the current value
+  useEffect(() => { isDoubleRef.current = isDouble; }, [isDouble]);
   const [soundEnabled,   setSoundEnabled]   = useState(enablePageSound);
   const [thumbnails,     setThumbnails]     = useState<string[]>([]);
   const [showThumbnails, setShowThumbnails] = useState(false);
@@ -202,10 +207,11 @@ export default function FlipbookCanvas({
       const dpr       = Math.min(window.devicePixelRatio || 1, 2); // cap DPR at 2×
       const vp        = page.getViewport({ scale: 1 });
       const displayW  = displayWRef.current || 600;
-      // Render at enough resolution for the current zoom level, capped to avoid
-      // oversized canvases that cause blank pages (memory/GPU limit)
-      const quality   = Math.min(Math.max(1.5, zoomRef.current), 3);
-      const scale     = Math.min((displayW / vp.width) * dpr * quality, 6);
+      // Render at enough resolution for the current zoom + fullscreen upscale factor
+      // so canvases stay sharp when CSS-zoomed to fill the screen.
+      const effectiveZoom = zoomRef.current * Math.max(1, fsZoomRef.current);
+      const quality   = Math.min(Math.max(1.5, effectiveZoom), 3);
+      const scale     = Math.min((displayW / vp.width) * dpr * quality, 7);
       const sv        = page.getViewport({ scale });
       canvas.width    = Math.round(sv.width);
       canvas.height   = Math.round(sv.height);
@@ -228,6 +234,7 @@ export default function FlipbookCanvas({
     const dh       = Math.round(pageNatH * scale);
 
     displayWRef.current = dw;
+    displayHRef.current = dh;
     setDisplayW(dw);
     setDisplayH(dh);
 
@@ -365,7 +372,7 @@ export default function FlipbookCanvas({
   useEffect(() => () => { if (reRenderTimer.current) clearTimeout(reRenderTimer.current); }, []);
 
   const applyZoom = useCallback((next: number) => {
-    const clamped = Math.max(0.5, Math.min(3, next));
+    const clamped = Math.max(1, Math.min(3, next));
     setZoom(clamped);
     zoomRef.current = clamped;
 
@@ -386,7 +393,7 @@ export default function FlipbookCanvas({
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
       const delta = e.deltaY > 0 ? -0.08 : 0.08;
-      applyZoom(Math.max(0.5, Math.min(3, zoomRef.current + delta)));
+      applyZoom(Math.max(1, Math.min(3, zoomRef.current + delta)));
     };
     window.addEventListener("wheel", onWheel, { passive: false });
     return () => window.removeEventListener("wheel", onWheel);
@@ -523,13 +530,35 @@ export default function FlipbookCanvas({
   useEffect(() => {
     const onFSChange = () => {
       const entering = !!document.fullscreenElement;
-      isFullscreenRef.current = entering;  // updated synchronously here
-      fsTransitionRef.current = false;     // clear — we now have correct state
+      isFullscreenRef.current = entering;
+      fsTransitionRef.current = false;
+
+      if (entering && displayWRef.current > 0 && displayHRef.current > 0) {
+        // Compute the CSS zoom factor the book will be scaled by in fullscreen,
+        // then store it so renderPdfPage uses adequate quality on next re-render.
+        fsZoomRef.current = Math.min(
+          (window.innerWidth  - 40) / (displayWRef.current * (isDoubleRef.current ? 2 : 1)),
+          (window.innerHeight - 96) / displayHRef.current,
+          2.5
+        );
+        // Re-render visible pages at the higher quality needed for fullscreen
+        setTimeout(() => {
+          const idx   = pageFlipRef.current?.getCurrentPageIndex?.() ?? 0;
+          const total = pdfDocRef.current?.numPages ?? 0;
+          for (let i = Math.max(1, idx); i <= Math.min(total, idx + 4); i++) {
+            renderedRef.current.delete(i);
+            renderPdfPage(i, true);
+          }
+        }, 200);
+      } else {
+        fsZoomRef.current = 1;
+      }
+
       setIsFullscreen(entering);
     };
     document.addEventListener("fullscreenchange", onFSChange);
     return () => document.removeEventListener("fullscreenchange", onFSChange);
-  }, []);
+  }, [renderPdfPage]);
 
   const toggleFullscreen = () => {
     // Set SYNCHRONOUSLY before requestFullscreen/exitFullscreen so that any
@@ -907,11 +936,11 @@ export default function FlipbookCanvas({
         <div className="flex items-center gap-1">
           {/* Zoom slider — drag left/right or use − / + buttons */}
           <Button variant="ghost" size="icon" className="text-gray-300 hover:text-white h-8 w-8"
-            onClick={() => applyZoom(Math.max(0.5, zoom - 0.25))} title="Zoom out">
+            onClick={() => applyZoom(Math.max(1, zoom - 0.25))} title="Zoom out">
             <ZoomOut className="w-4 h-4" />
           </Button>
           <input
-            type="range" min={50} max={300} step={5}
+            type="range" min={100} max={300} step={5}
             value={Math.round(zoom * 100)}
             onChange={e => applyZoom(Number(e.target.value) / 100)}
             className="w-24 h-1 accent-indigo-500 cursor-pointer"
