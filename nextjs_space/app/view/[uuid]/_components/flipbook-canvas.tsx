@@ -521,44 +521,39 @@ export default function FlipbookCanvas({
     else performSearch(searchQuery);
   }, [searchQuery, searchResults, searchPerformed, searchIndex, performSearch, goToSearchResult]);
 
-  // ── Fullscreen — true OS fullscreen, CSS zoom-to-fit, no re-init ──
-  // requestFullscreen() for real fullscreen (hides browser chrome).
-  // We do NOT re-initialize PageFlip — instead we scale the existing
-  // book with CSS zoom-to-fit so it fills the screen.
-  // The resize handler already ignores resize events that fire during
-  // fullscreen (document.fullscreenElement guard), so PageFlip stays intact.
+  // ── Fullscreen ────────────────────────────────────────────────────
+  // On enter: re-init PageFlip using the actual screen dimensions so the
+  // book fills the display rather than being CSS-scaled from iframe size.
+  // On exit: re-init back to the iframe/window dimensions.
+  // Both directions use a single controlled re-init (via resizeKey) so the
+  // browser's own resize event can't fire a competing second re-init.
   useEffect(() => {
     const onFSChange = () => {
       const entering = !!document.fullscreenElement;
       isFullscreenRef.current = entering;
-      fsTransitionRef.current = false;
+      fsZoomRef.current = 1; // reset — re-init will use real dimensions, no CSS scaling needed
 
-      if (entering && displayWRef.current > 0 && displayHRef.current > 0) {
-        // Compute the CSS zoom factor the book will be scaled by in fullscreen,
-        // then store it so renderPdfPage uses adequate quality on next re-render.
-        fsZoomRef.current = Math.min(
-          (window.innerWidth  - 40) / (displayWRef.current * (isDoubleRef.current ? 2 : 1)),
-          (window.innerHeight - 96) / displayHRef.current,
-          2.5
-        );
-        // Re-render visible pages at the higher quality needed for fullscreen
-        setTimeout(() => {
-          const idx   = pageFlipRef.current?.getCurrentPageIndex?.() ?? 0;
-          const total = pdfDocRef.current?.numPages ?? 0;
-          for (let i = Math.max(1, idx); i <= Math.min(total, idx + 4); i++) {
-            renderedRef.current.delete(i);
-            renderPdfPage(i, true);
-          }
-        }, 200);
+      if (entering) {
+        // Clear the flag set by toggleFullscreen() so normal guards resume.
+        fsTransitionRef.current = false;
+        // Defer the re-init slightly so the browser finishes the fullscreen
+        // transition and window.innerWidth/Height reflect the screen size.
+        setTimeout(() => setResizeKey(k => k + 1), 300);
       } else {
-        fsZoomRef.current = 1;
+        // Keep fsTransitionRef = true (already set by toggleFullscreen before
+        // exitFullscreen) so the browser's resize event cannot trigger its own
+        // re-init and race with ours. Clear it as part of our single re-init.
+        setTimeout(() => {
+          fsTransitionRef.current = false;
+          setResizeKey(k => k + 1);
+        }, 300);
       }
 
       setIsFullscreen(entering);
     };
     document.addEventListener("fullscreenchange", onFSChange);
     return () => document.removeEventListener("fullscreenchange", onFSChange);
-  }, [renderPdfPage]);
+  }, []);
 
   const toggleFullscreen = () => {
     // Set SYNCHRONOUSLY before requestFullscreen/exitFullscreen so that any
