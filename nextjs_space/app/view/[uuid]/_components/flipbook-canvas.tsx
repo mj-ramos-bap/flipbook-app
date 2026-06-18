@@ -319,15 +319,20 @@ export default function FlipbookCanvas({
         swipeDistance:      30,
         showPageCorners:    true,
         disableFlipByClick: false,
+        startPage:          Math.max(0, savedPageRef.current - 1),
       });
 
       pf.loadFromHTML(pageDivs);
       if (cancelled) { try { pf.destroy?.(); } catch {} return; }
       pageFlipRef.current = pf;
 
-      // Await initial page renders so canvases are never blank on first display
-      const preCount = Math.min(isDouble ? 4 : 2, totalPages);
-      await Promise.all(Array.from({ length: preCount }, (_, i) => renderPdfPage(i + 1)));
+      // Pre-render pages around the restore position so they are never blank.
+      const restorePage = savedPageRef.current;
+      const preStart = Math.max(1, restorePage - 1);
+      const preEnd   = Math.min(totalPages, restorePage + (isDouble ? 3 : 1));
+      await Promise.all(
+        Array.from({ length: preEnd - preStart + 1 }, (_, i) => renderPdfPage(preStart + i))
+      );
       if (cancelled) return;
 
       pf.on("flip", (e: any) => {
@@ -343,20 +348,10 @@ export default function FlipbookCanvas({
         }
       });
 
-      // Restore page position BEFORE marking the book as ready so the user
-      // never sees the cover page flash between fullscreen/minimize transitions.
-      const pageToRestore = savedPageRef.current;
-      if (pageToRestore > 1 && !cancelled) {
-        setTimeout(() => {
-          if (!cancelled) {
-            goToPageRef.current(pageToRestore);
-            // Give PageFlip one frame to process the flip before revealing the book
-            setTimeout(() => { if (!cancelled) setBookReady(true); }, 50);
-          }
-        }, 150);
-      } else {
-        setBookReady(true);
-      }
+      // Sync React state with the start page PageFlip was initialized at.
+      // No flip animation needed — startPage set in the constructor places it there silently.
+      setCurrentPage(restorePage);
+      setBookReady(true);
     })();
 
     return () => {
