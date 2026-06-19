@@ -56,6 +56,9 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
         ...(body?.thumbnailPath !== undefined && { thumbnailPath: body.thumbnailPath }),
         ...(body?.thumbnailIsPublic !== undefined && { thumbnailIsPublic: body.thumbnailIsPublic }),
         ...(body?.status !== undefined && { status: body.status }),
+        ...(body?.cloudStoragePath !== undefined && { cloudStoragePath: body.cloudStoragePath }),
+        ...(body?.renderStatus !== undefined && { renderStatus: body.renderStatus }),
+        ...(body?.renderedPageCount !== undefined && { renderedPageCount: body.renderedPageCount }),
       },
     });
     return NextResponse.json({ flipbook });

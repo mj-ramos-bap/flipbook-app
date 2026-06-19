@@ -1,7 +1,7 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Save, Share2, BarChart3, Code2, Eye, Loader2, Lock, Globe, BookOpen, Printer, Download, Copy, Check, ExternalLink, Sparkles, Volume2 } from "lucide-react";
+import { ArrowLeft, Save, Share2, BarChart3, Code2, Eye, Loader2, Lock, Globe, BookOpen, Printer, Download, Copy, Check, ExternalLink, Sparkles, Volume2, Upload, RefreshCw, FileText, X, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -42,6 +42,14 @@ export default function FlipbookDetail({ id }: { id: string }) {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [form, setForm] = useState<any>({});
+
+  // ── Replace PDF state ────────────────────────────────────────────
+  const replaceFileRef = useRef<HTMLInputElement>(null);
+  const [replaceFile, setReplaceFile] = useState<File | null>(null);
+  const [replaceDragOver, setReplaceDragOver] = useState(false);
+  const [replaceStatus, setReplaceStatus] = useState<"idle" | "uploading" | "processing" | "rendering" | "done" | "error">("idle");
+  const [replaceRenderProgress, setReplaceRenderProgress] = useState<{ page: number; total: number } | null>(null);
+  const [replaceError, setReplaceError] = useState("");
 
   useEffect(() => {
     fetchFlipbook();
@@ -92,6 +100,106 @@ export default function FlipbookDetail({ id }: { id: string }) {
       setSaving(false);
     }
   };
+
+  const handleReplace = useCallback(async () => {
+    if (!replaceFile) return;
+    setReplaceStatus("uploading");
+    setReplaceError("");
+    setReplaceRenderProgress(null);
+
+    try {
+      // 1. Upload new PDF to GCS
+      const uploadRes = await fetch("/api/upload/direct", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/pdf",
+          "Content-Length": String(replaceFile.size),
+          "x-file-name": encodeURIComponent(replaceFile.name ?? "upload.pdf"),
+        },
+        body: replaceFile,
+      });
+      if (!uploadRes.ok) throw new Error("PDF upload failed");
+      const { cloud_storage_path } = (await uploadRes.json()) ?? {};
+
+      setReplaceStatus("processing");
+
+      // 2. Generate new thumbnail + page count via pdfjs in the browser
+      let newPageCount = 0;
+      let newThumbnailPath: string | null = null;
+      try {
+        const pdfjsLib = await import("pdfjs-dist");
+        pdfjsLib.GlobalWorkerOptions.workerSrc = `/pdf.worker.min.js`;
+        const buf = await replaceFile.arrayBuffer();
+        const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+        newPageCount = doc.numPages ?? 0;
+
+        const page = await doc.getPage(1);
+        const vp = page.getViewport({ scale: 1 });
+        const sc = Math.min(480 / vp.width, 360 / vp.height);
+        const sv = page.getViewport({ scale: sc });
+        const c = document.createElement("canvas");
+        c.width = Math.round(sv.width); c.height = Math.round(sv.height);
+        await page.render({ canvasContext: c.getContext("2d")!, viewport: sv }).promise;
+        const blob = await new Promise<Blob>((resolve, reject) =>
+          c.toBlob((b) => b ? resolve(b) : reject(new Error("toBlob failed")), "image/jpeg", 0.85)
+        );
+        const thumbRes = await fetch("/api/upload/thumbnail", {
+          method: "POST",
+          headers: { "Content-Type": "image/jpeg", "Content-Length": String(blob.size) },
+          body: blob,
+        });
+        if (thumbRes.ok) newThumbnailPath = ((await thumbRes.json()) ?? {}).cloud_storage_path ?? null;
+      } catch {}
+
+      // 3. Patch flipbook — same uuid/id, new cloudStoragePath + reset render state
+      await fetch(`/api/flipbooks/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          cloudStoragePath: cloud_storage_path,
+          renderStatus: "pending",
+          renderedPageCount: 0,
+          ...(newPageCount > 0 && { pageCount: newPageCount }),
+          ...(newThumbnailPath && { thumbnailPath: newThumbnailPath, thumbnailIsPublic: false }),
+        }),
+      });
+
+      // 4. Re-render all pages server-side (streams progress via SSE)
+      setReplaceStatus("rendering");
+      try {
+        const renderRes = await fetch(`/api/flipbooks/${id}/render`, { method: "POST" });
+        const reader = renderRes.body?.getReader();
+        if (reader) {
+          const dec = new TextDecoder();
+          let buf2 = "";
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf2 += dec.decode(value, { stream: true });
+            const lines = buf2.split("\n");
+            buf2 = lines.pop() ?? "";
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue;
+              try {
+                const ev = JSON.parse(line.slice(6));
+                if (ev.status === "progress") setReplaceRenderProgress({ page: ev.page, total: ev.total });
+              } catch {}
+            }
+          }
+        }
+      } catch {}
+
+      setReplaceStatus("done");
+      setReplaceFile(null);
+      toast.success("PDF replaced — all embed codes remain unchanged");
+      // Refresh flipbook data to show updated page count
+      fetchFlipbook();
+    } catch (e: any) {
+      setReplaceError(e?.message ?? "Replace failed");
+      setReplaceStatus("error");
+      toast.error("Failed to replace PDF");
+    }
+  }, [replaceFile, id]);
 
   if (loading) {
     return <div className="flex items-center justify-center min-h-[50vh]"><Loader2 className="w-8 h-8 animate-spin text-indigo-600" /></div>;
@@ -207,6 +315,129 @@ export default function FlipbookDetail({ id }: { id: string }) {
                     </div>
                   );
                 })}
+              </CardContent>
+            </Card>
+
+            {/* Replace PDF */}
+            <Card className="border-0 shadow-md">
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <RefreshCw className="w-4 h-4" /> Replace PDF
+                </CardTitle>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Upload a new PDF version. All embed codes and share links stay unchanged — they always point to the latest version.
+                </p>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {/* Drop zone */}
+                <div
+                  className={`relative border-2 border-dashed rounded-xl p-6 text-center transition-colors cursor-pointer ${
+                    replaceDragOver
+                      ? "border-indigo-400 bg-indigo-50"
+                      : replaceFile
+                      ? "border-green-400 bg-green-50"
+                      : "border-gray-300 hover:border-indigo-300 hover:bg-indigo-50/50"
+                  }`}
+                  onDragOver={(e: any) => { e?.preventDefault?.(); setReplaceDragOver(true); }}
+                  onDragLeave={() => setReplaceDragOver(false)}
+                  onDrop={(e: any) => {
+                    e?.preventDefault?.();
+                    setReplaceDragOver(false);
+                    const f = e?.dataTransfer?.files?.[0];
+                    if (f?.type === "application/pdf") { setReplaceFile(f); setReplaceStatus("idle"); setReplaceError(""); }
+                    else setReplaceError("Please select a PDF file");
+                  }}
+                  onClick={() => replaceFileRef?.current?.click?.()}
+                >
+                  <input
+                    ref={replaceFileRef}
+                    type="file"
+                    accept=".pdf"
+                    className="hidden"
+                    onChange={(e: any) => {
+                      const f = e?.target?.files?.[0];
+                      if (f) { setReplaceFile(f); setReplaceStatus("idle"); setReplaceError(""); }
+                    }}
+                  />
+                  {replaceFile ? (
+                    <div className="flex items-center justify-center gap-3">
+                      <FileText className="w-8 h-8 text-green-600" />
+                      <div className="text-left">
+                        <p className="font-medium text-green-800 text-sm">{replaceFile.name}</p>
+                        <p className="text-xs text-green-600">{((replaceFile.size ?? 0) / (1024 * 1024)).toFixed(1)} MB</p>
+                      </div>
+                      <Button variant="ghost" size="icon" className="ml-2"
+                        onClick={(e: any) => { e?.stopPropagation?.(); setReplaceFile(null); setReplaceStatus("idle"); }}>
+                        <X className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  ) : (
+                    <div>
+                      <Upload className="w-8 h-8 mx-auto text-gray-400 mb-2" />
+                      <p className="text-sm font-medium">Drag & drop new PDF here</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">or click to browse</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Error */}
+                {replaceError && (
+                  <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 flex-shrink-0" /> {replaceError}
+                  </div>
+                )}
+
+                {/* Progress */}
+                {(replaceStatus === "uploading" || replaceStatus === "processing") && (
+                  <div className="text-sm text-muted-foreground flex items-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    {replaceStatus === "uploading" ? "Uploading PDF..." : "Generating thumbnail..."}
+                  </div>
+                )}
+                {replaceStatus === "rendering" && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="flex items-center gap-2">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        {replaceRenderProgress
+                          ? `Re-rendering pages: ${replaceRenderProgress.page} / ${replaceRenderProgress.total}`
+                          : "Preparing pages..."}
+                      </span>
+                      <span className="text-muted-foreground">
+                        {replaceRenderProgress
+                          ? `${Math.round((replaceRenderProgress.page / replaceRenderProgress.total) * 100)}%`
+                          : "0%"}
+                      </span>
+                    </div>
+                    <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full transition-all duration-300"
+                        style={{
+                          width: replaceRenderProgress
+                            ? `${Math.round((replaceRenderProgress.page / replaceRenderProgress.total) * 100)}%`
+                            : "0%",
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+                {replaceStatus === "done" && (
+                  <div className="bg-green-50 text-green-700 p-3 rounded-lg text-sm flex items-center gap-2">
+                    <Check className="w-4 h-4" /> PDF replaced successfully — all embed codes unchanged.
+                  </div>
+                )}
+
+                <Button
+                  onClick={handleReplace}
+                  disabled={!replaceFile || replaceStatus === "uploading" || replaceStatus === "processing" || replaceStatus === "rendering"}
+                  variant="outline"
+                  className="w-full border-indigo-200 text-indigo-700 hover:bg-indigo-50"
+                >
+                  {(replaceStatus === "uploading" || replaceStatus === "processing" || replaceStatus === "rendering")
+                    ? <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                    : <RefreshCw className="w-4 h-4 mr-2" />}
+                  {replaceStatus === "uploading" ? "Uploading..." : replaceStatus === "processing" ? "Processing..." : replaceStatus === "rendering" ? "Re-rendering..." : "Upload & Replace"}
+                </Button>
               </CardContent>
             </Card>
 
