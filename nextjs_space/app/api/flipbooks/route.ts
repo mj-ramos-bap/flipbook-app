@@ -42,7 +42,8 @@ export async function POST(req: Request) {
         pageCount: body?.pageCount ?? 0,
         fileSize: body?.fileSize ?? 0,
         status: "ready",
-      },
+        ...(body?.folderId ? { folderId: body.folderId } : {}),
+      } as any,
     });
     return NextResponse.json({ flipbook });
   } catch (e: any) {

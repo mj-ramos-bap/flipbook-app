@@ -59,7 +59,8 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
         ...(body?.cloudStoragePath !== undefined && { cloudStoragePath: body.cloudStoragePath }),
         ...(body?.renderStatus !== undefined && { renderStatus: body.renderStatus }),
         ...(body?.renderedPageCount !== undefined && { renderedPageCount: body.renderedPageCount }),
-      },
+        ...(body?.folderId !== undefined && { folderId: body.folderId }),
+      } as any,
     });
     return NextResponse.json({ flipbook });
   } catch (e: any) {

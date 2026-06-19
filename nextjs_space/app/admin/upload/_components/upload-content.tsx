@@ -1,11 +1,13 @@
 "use client";
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Upload, FileText, Loader2, CheckCircle, AlertCircle, X } from "lucide-react";
+import { Upload, FileText, Loader2, CheckCircle, AlertCircle, X, FolderOpen, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { motion } from "framer-motion";
+
+interface FolderOption { id: string; name: string; }
 
 export default function UploadContent() {
   const router = useRouter();
@@ -13,12 +15,18 @@ export default function UploadContent() {
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [folderId, setFolderId] = useState<string>("");
+  const [folders, setFolders] = useState<FolderOption[]>([]);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState<"idle" | "uploading" | "processing" | "rendering" | "done" | "error">("idle");
   const [renderProgress, setRenderProgress] = useState<{ page: number; total: number } | null>(null);
   const [error, setError] = useState("");
   const [dragOver, setDragOver] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/folders").then((r) => r.json()).then((d) => setFolders(d?.folders ?? [])).catch(() => {});
+  }, []);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -115,6 +123,7 @@ export default function UploadContent() {
           cloudStoragePath: cloud_storage_path,
           isPublic: false,
           fileSize,
+          ...(folderId ? { folderId } : {}),
         }),
       });
       const { flipbook } = (await fbRes.json()) ?? {};
@@ -218,7 +227,7 @@ export default function UploadContent() {
             )}
           </div>
 
-          {/* Title and description */}
+          {/* Title, description, folder */}
           <div className="space-y-4">
             <div>
               <label className="text-sm font-medium mb-1.5 block">Title *</label>
@@ -233,6 +242,31 @@ export default function UploadContent() {
                 value={description} onChange={(e: any) => setDescription(e?.target?.value ?? "")}
                 placeholder="Optional description"
               />
+            </div>
+            <div>
+              <label className="text-sm font-medium mb-1.5 block flex items-center gap-1.5">
+                <FolderOpen className="w-4 h-4 text-indigo-500" /> Folder
+                <span className="text-muted-foreground font-normal">(optional)</span>
+              </label>
+              <div className="relative">
+                <select
+                  value={folderId}
+                  onChange={(e: any) => setFolderId(e?.target?.value ?? "")}
+                  className="w-full h-10 pl-3 pr-8 rounded-md border border-input bg-background text-sm appearance-none cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="">No folder</option>
+                  {folders.map((f) => (
+                    <option key={f.id} value={f.id}>{f.name}</option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+              </div>
+              {folders.length === 0 && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  No folders yet —{" "}
+                  <a href="/admin/folders" className="text-indigo-600 hover:underline">create one in Folders</a> first.
+                </p>
+              )}
             </div>
           </div>
 
