@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getFileUrl } from "@/lib/s3";
 import { verifyUuid } from "@/lib/link-token";
-import { generateGcsSignedUrl } from "@/lib/gcs-auth";
+import { generateGcsSignedUrl, generateGcsSignedUrls } from "@/lib/gcs-auth";
 import { getBucketConfig } from "@/lib/aws-config";
 
 export async function GET(req: Request, { params }: { params: { uuid: string } }) {
@@ -41,11 +41,24 @@ export async function GET(req: Request, { params }: { params: { uuid: string } }
     // from GCS, bypassing Cloud Run — faster and supports range requests natively).
     // Falls back to the server-side proxy for local dev where ADC is unavailable.
     const { bucketName } = getBucketConfig();
-    const signedUrl = await generateGcsSignedUrl(bucketName, flipbook.cloudStoragePath);
-    const pdfUrl = signedUrl ?? `/api/viewer/${flipbook.uuid}/pdf`;
 
-    // Get branding
-    const branding = await prisma.brandingSettings.findFirst();
+    // Generate pre-rendered page image URLs in parallel with the PDF URL
+    const isRendered = flipbook.renderStatus === 'done';
+    const renderedCount = flipbook.renderedPageCount ?? 0;
+
+    const [signedUrl, pageImageUrls, branding] = await Promise.all([
+      generateGcsSignedUrl(bucketName, flipbook.cloudStoragePath),
+      isRendered && renderedCount > 0
+        ? generateGcsSignedUrls(
+            bucketName,
+            Array.from({ length: renderedCount }, (_, i) => `rendered/${flipbook.uuid}/p${i + 1}.jpg`),
+            3600 // 1-hour validity
+          )
+        : Promise.resolve(null),
+      prisma.brandingSettings.findFirst(),
+    ]);
+
+    const pdfUrl = signedUrl ?? `/api/viewer/${flipbook.uuid}/pdf`;
     const logoUrl = branding?.logoPath ? "/api/branding/logo" : null;
 
     return NextResponse.json({
@@ -54,6 +67,7 @@ export async function GET(req: Request, { params }: { params: { uuid: string } }
       title: flipbook?.title,
       pageCount: flipbook?.pageCount,
       pdfUrl,
+      pageImageUrls: pageImageUrls ?? null,
       passwordProtected: flipbook?.passwordProtected ?? false,
       pagesPerView: flipbook?.pagesPerView ?? "double",
       enableShare: flipbook?.enableShare ?? true,

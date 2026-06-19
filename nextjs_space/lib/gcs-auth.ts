@@ -42,6 +42,58 @@ async function getServiceAccountEmail(): Promise<string | null> {
   }
 }
 
+// Generates signed URLs for multiple objects in parallel.
+// Fetches the ADC token and service account email once, then signs all paths concurrently.
+export async function generateGcsSignedUrls(
+  bucketName: string,
+  objectPaths: string[],
+  expiresInSeconds = 900
+): Promise<(string | null)[]> {
+  if (objectPaths.length === 0) return [];
+  try {
+    const [token, serviceAccount] = await Promise.all([
+      getGcsToken(),
+      getServiceAccountEmail(),
+    ]);
+    if (!token || !serviceAccount) return objectPaths.map(() => null);
+
+    const expiry = Math.floor(Date.now() / 1000) + expiresInSeconds;
+
+    return Promise.all(
+      objectPaths.map(async (objectPath) => {
+        try {
+          const stringToSign = `GET\n\n\n${expiry}\n/${bucketName}/${objectPath}`;
+          const payload = Buffer.from(stringToSign).toString('base64');
+
+          const signRes = await fetch(
+            `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${encodeURIComponent(serviceAccount)}:signBlob`,
+            {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ payload }),
+            }
+          );
+          if (!signRes.ok) return null;
+          const { signedBlob } = await signRes.json();
+          if (!signedBlob) return null;
+
+          const encodedPath = objectPath.split('/').map(encodeURIComponent).join('/');
+          const params = new URLSearchParams({
+            GoogleAccessId: serviceAccount,
+            Expires: String(expiry),
+            Signature: signedBlob,
+          });
+          return `https://storage.googleapis.com/${encodeURIComponent(bucketName)}/${encodedPath}?${params.toString()}`;
+        } catch {
+          return null;
+        }
+      })
+    );
+  } catch {
+    return objectPaths.map(() => null);
+  }
+}
+
 // Generates a short-lived GCS V2 signed URL so the browser can download directly
 // from GCS without routing through Cloud Run. Falls back to null outside GCP.
 export async function generateGcsSignedUrl(

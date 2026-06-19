@@ -11,6 +11,7 @@ interface ViewerData {
   title: string;
   pageCount: number;
   pdfUrl: string | null;
+  pageImageUrls: (string | null)[] | null;
   passwordProtected: boolean;
   pagesPerView: string;
   enableShare: boolean;
@@ -215,7 +216,7 @@ export default function FlipbookViewer({ uuid, token }: { uuid: string; token?: 
     );
   }
 
-  if (!data?.pdfUrl) {
+  if (!data?.pdfUrl && !data?.pageImageUrls?.length) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <p className="text-muted-foreground">PDF not available</p>
@@ -229,7 +230,8 @@ export default function FlipbookViewer({ uuid, token }: { uuid: string; token?: 
       onCut={(e: any) => e?.preventDefault?.()}
     >
       <FlipbookCanvas
-        pdfUrl={data.pdfUrl}
+        pdfUrl={data.pdfUrl ?? ""}
+        pageImageUrls={data?.pageImageUrls ?? null}
         title={data?.title ?? "Flipbook"}
         pagesPerView={data?.pagesPerView ?? "double"}
         enableShare={data?.enableShare ?? false}

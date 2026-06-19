@@ -19,6 +19,7 @@ interface TocItem {
 
 interface FlipbookCanvasProps {
   pdfUrl: string;
+  pageImageUrls?: (string | null)[] | null;
   title: string;
   pagesPerView: string;
   enableShare: boolean;
@@ -32,7 +33,7 @@ interface FlipbookCanvasProps {
 }
 
 export default function FlipbookCanvas({
-  pdfUrl, title, pagesPerView, enableShare, enablePrint, enableDownload,
+  pdfUrl, pageImageUrls, title, pagesPerView, enableShare, enablePrint, enableDownload,
   enableAnimatedFlip, enablePageSound, branding, uuid, onPageChange,
 }: FlipbookCanvasProps) {
   // ── Refs ──────────────────────────────────────────────────────────
@@ -40,7 +41,8 @@ export default function FlipbookCanvas({
   const bookWrapRef   = useRef<HTMLDivElement>(null); // PageFlip mounts here
   const pageFlipRef   = useRef<any>(null);
   const pdfDocRef     = useRef<any>(null);
-  const renderedRef   = useRef<Set<number>>(new Set());
+  const renderedQualityRef = useRef<Map<number, number>>(new Map()); // page → quality it was rendered at
+  const backObserverRef    = useRef<MutationObserver | null>(null); // watches for PageFlip clone elements
   const canvasesRef   = useRef<(HTMLCanvasElement | null)[]>([]);
   const displayWRef        = useRef(0);
   const displayHRef        = useRef(0);
@@ -55,6 +57,7 @@ export default function FlipbookCanvas({
   const renderPdfPageRef   = useRef<(pageNum: number, forceRender?: boolean) => Promise<void>>(() => Promise.resolve());
   const totalPagesRef      = useRef(0);
   const reinitDuringFSRef  = useRef(false); // mode/resize re-init happened while fullscreen
+  const pageImageUrlsRef   = useRef<(string | null)[] | null>(pageImageUrls ?? null);
 
   // ── State ─────────────────────────────────────────────────────────
   const isInIframe = typeof window !== "undefined" && window.self !== window.top;
@@ -75,6 +78,7 @@ export default function FlipbookCanvas({
   // Keep refs in sync so fullscreenchange handler (a [] closure) can read current values
   useEffect(() => { isDoubleRef.current = isDouble; }, [isDouble]);
   useEffect(() => { totalPagesRef.current = totalPages; }, [totalPages]);
+  useEffect(() => { pageImageUrlsRef.current = pageImageUrls ?? null; }, [pageImageUrls]);
   // Fade the book back in whenever a re-init completes (bookReady flips to true)
   useEffect(() => { if (bookReady) setBookVisible(true); }, [bookReady]);
   const [soundEnabled,   setSoundEnabled]   = useState(enablePageSound);
@@ -92,6 +96,18 @@ export default function FlipbookCanvas({
   const [jumpPage,       setJumpPage]       = useState("");
 
   const primaryColor = branding?.primaryColor ?? "#4F46E5";
+
+  // ── Paper-back CSS ────────────────────────────────────────────────
+  // Inject once: gives page divs a paper background via class so it survives
+  // PageFlip's style.cssText overrides during animation, and carries through
+  // to cloneNode copies (used as the back face during soft-page flips).
+  useEffect(() => {
+    const s = document.createElement("style");
+    s.dataset.id = "flipbook-page-styles";
+    s.textContent = ".fb-page { background: linear-gradient(160deg,#f7f3ee 0%,#ede8e2 100%); }";
+    document.head.appendChild(s);
+    return () => s.remove();
+  }, []);
 
   // ── Audio ─────────────────────────────────────────────────────────
   const audioCtxRef    = useRef<AudioContext | null>(null);
@@ -133,10 +149,35 @@ export default function FlipbookCanvas({
     } catch {}
   }, [soundEnabled, enablePageSound]);
 
-  // ── PDF Loading ───────────────────────────────────────────────────
-  useEffect(() => { loadPdf(); }, [pdfUrl]);
+  // ── PDF / Image Loading ───────────────────────────────────────────
+  useEffect(() => { loadPdf(); }, [pdfUrl, pageImageUrls]);
 
   const loadPdf = async () => {
+    // Fast path: pre-rendered images exist — get dimensions from the first image,
+    // skip downloading the PDF entirely. TOC/search unavailable in this mode.
+    const imgs = pageImageUrlsRef.current;
+    if (imgs?.length && imgs[0]) {
+      try {
+        const img = new window.Image();
+        img.crossOrigin = "anonymous";
+        await new Promise<void>((res) => {
+          img.onload = () => res();
+          img.onerror = () => res();
+          img.src = imgs[0]!;
+        });
+        setPageNatW(img.naturalWidth || 612);
+        setPageNatH(img.naturalHeight || 792);
+        setTotalPages(imgs.length);
+        setPdfLoaded(true);
+        setHasToc(false);
+        // Use image URLs as thumbnails — browser lazy-loads on scroll
+        setThumbnails(imgs.map((u) => u ?? ""));
+      } catch (e) { console.error("Image-mode load error:", e); }
+      return;
+    }
+
+    // Original pdfjs path
+    if (!pdfUrl) return;
     try {
       const pdfjsLib = await import("pdfjs-dist");
       pdfjsLib.GlobalWorkerOptions.workerSrc = `/pdf.worker.min.js`;
@@ -202,31 +243,59 @@ export default function FlipbookCanvas({
   };
 
   // ── PDF page → canvas ─────────────────────────────────────────────
-  // Renders at max(1.5, zoom)× the display resolution so the canvas
-  // stays sharp when the user zooms in via the toolbar.
+  // Quality-tracked rendering: skips re-render only when the page was already
+  // rendered at ≥85% of the currently required quality level. This means
+  // pages automatically re-render when zoom or fullscreen boosts requirements,
+  // fixing blurry-on-navigation and the fullscreen current-page quality issues.
   const renderPdfPage = useCallback(async (pageNum: number, forceRender = false) => {
-    if (!pdfDocRef.current) return;
-    if (pageNum < 1 || pageNum > (pdfDocRef.current.numPages ?? 0)) return;
-    if (renderedRef.current.has(pageNum) && !forceRender) return;
     const canvas = canvasesRef.current[pageNum - 1];
     if (!canvas) return;
-    renderedRef.current.add(pageNum);
+
+    // ── Fast path: pre-rendered image ────────────────────────────────
+    const imgUrl = pageImageUrlsRef.current?.[pageNum - 1];
+    if (imgUrl) {
+      const stored = renderedQualityRef.current.get(pageNum) ?? 0;
+      if (!forceRender && stored > 0) return;
+      renderedQualityRef.current.set(pageNum, 1);
+      await new Promise<void>((resolve) => {
+        const img = new window.Image();
+        img.crossOrigin = "anonymous";
+        img.onload = () => {
+          canvas.width  = img.naturalWidth;
+          canvas.height = img.naturalHeight;
+          const ctx = canvas.getContext("2d");
+          if (ctx) ctx.drawImage(img, 0, 0);
+          resolve();
+        };
+        img.onerror = () => { renderedQualityRef.current.delete(pageNum); resolve(); };
+        img.src = imgUrl;
+      });
+      return;
+    }
+
+    // ── pdfjs path (quality-tracked) ─────────────────────────────────
+    if (!pdfDocRef.current) return;
+    if (pageNum < 1 || pageNum > (pdfDocRef.current.numPages ?? 0)) return;
+
+    // Compute required quality before any async work (cheap path for skipping)
+    const effectiveZoom = zoomRef.current * Math.max(1, fsZoomRef.current);
+    const quality       = Math.min(Math.max(1.5, effectiveZoom), 3);
+    const stored        = renderedQualityRef.current.get(pageNum) ?? 0;
+    if (!forceRender && stored >= quality * 0.85) return;
+
+    renderedQualityRef.current.set(pageNum, quality);
     try {
-      const page = await pdfDocRef.current.getPage(pageNum);
-      const dpr       = Math.min(window.devicePixelRatio || 1, 2); // cap DPR at 2×
+      const page      = await pdfDocRef.current.getPage(pageNum);
+      const dpr       = Math.min(window.devicePixelRatio || 1, 2);
       const vp        = page.getViewport({ scale: 1 });
       const displayW  = displayWRef.current || 600;
-      // Render at enough resolution for the current zoom + fullscreen upscale factor
-      // so canvases stay sharp when CSS-zoomed to fill the screen.
-      const effectiveZoom = zoomRef.current * Math.max(1, fsZoomRef.current);
-      const quality   = Math.min(Math.max(1.5, effectiveZoom), 3);
       const scale     = Math.min((displayW / vp.width) * dpr * quality, 7);
       const sv        = page.getViewport({ scale });
       canvas.width    = Math.round(sv.width);
       canvas.height   = Math.round(sv.height);
       const rc = canvas.getContext("2d");
       if (rc) await page.render({ canvasContext: rc, viewport: sv }).promise;
-    } catch { renderedRef.current.delete(pageNum); }
+    } catch { renderedQualityRef.current.delete(pageNum); }
   }, []);
   // Keep ref in sync so fullscreenchange handler (a [] closure) can call it
   useEffect(() => { renderPdfPageRef.current = renderPdfPage; }, [renderPdfPage]);
@@ -253,6 +322,7 @@ export default function FlipbookCanvas({
     setDisplayH(dh);
 
     let cancelled = false;
+    let removeFlipHandlers = () => {}; // set inside async IIFE once handlers are registered
 
     (async () => {
       const { PageFlip } = await import("page-flip");
@@ -277,15 +347,22 @@ export default function FlipbookCanvas({
       wrapOuter.appendChild(wrap);
 
       canvasesRef.current = new Array(totalPages).fill(null);
-      renderedRef.current.clear();
+      renderedQualityRef.current.clear();
 
       const pageDivs: HTMLDivElement[] = [];
       for (let i = 0; i < totalPages; i++) {
         const div = document.createElement("div");
-        div.style.cssText = `background:#fff;overflow:hidden;position:relative;width:${dw}px;height:${dh}px;`;
+        // data-page is read by the MutationObserver when PageFlip clones this
+        // element for the back face during a soft-page flip animation.
+        div.dataset.page = String(i + 1);
+        div.classList.add("fb-page");
+        // background is via .fb-page class (survives PageFlip's style.cssText overrides)
+        div.style.cssText = `overflow:hidden;position:relative;width:${dw}px;height:${dh}px;`;
 
         const canvas = document.createElement("canvas");
-        canvas.style.cssText = "display:block;width:100%;height:100%;";
+        // backface-visibility:hidden keeps the front canvas from showing mirrored
+        // during the flip animation (the paper-colored .fb-page background shows instead)
+        canvas.style.cssText = "display:block;width:100%;height:100%;-webkit-backface-visibility:hidden;backface-visibility:hidden;";
         div.appendChild(canvas);
         canvasesRef.current[i] = canvas;
 
@@ -316,10 +393,7 @@ export default function FlipbookCanvas({
         height:             dh,
         size:               "fixed",
         drawShadow:         true,
-        // Single-page portrait mode: instant (1ms) so forward/backward look the same.
-        // The backward portrait flip briefly exposes a two-page spread layout — instant
-        // transitions eliminate the visual inconsistency.
-        flippingTime:       enableAnimatedFlip && isDouble ? 800 : 1,
+        flippingTime:       enableAnimatedFlip ? 800 : 1,
         usePortrait:        !isDouble, // portrait mode = single-page (advances 1 per flip)
         startZIndex:        0,
         maxShadowOpacity:   0.6,
@@ -336,6 +410,110 @@ export default function FlipbookCanvas({
       pf.loadFromHTML(pageDivs);
       if (cancelled) { try { pf.destroy?.(); } catch {} return; }
       pageFlipRef.current = pf;
+
+      // ── Blurred back-face observer ────────────────────────────────
+      // PageFlip creates a cloneNode(true) of our page div for the back face
+      // during every soft-page flip. The clone's canvas starts blank (transparent),
+      // which is why the default back looks "see-through". We observe the DOM for
+      // new .stf__item insertions (= PageFlip clones) and immediately:
+      //  1. Apply blur+opacity to the clone canvas (paper shows through slightly)
+      //  2. Render a low-quality PDF thumbnail into it (the "bleed-through" content)
+      if (backObserverRef.current) backObserverRef.current.disconnect();
+      const obs = new MutationObserver((mutations) => {
+        for (const mutation of mutations) {
+          for (const node of mutation.addedNodes) {
+            if (!(node instanceof HTMLElement)) continue;
+            if (!node.classList.contains("stf__item")) continue;
+            // Only process clones — originals have data-page set but were already
+            // in the DOM before the observer started.
+            const clonePageNum = parseInt((node as HTMLElement).dataset.page ?? "0", 10);
+            if (!clonePageNum) continue;
+            const cloneCanvas = node.querySelector("canvas") as HTMLCanvasElement | null;
+            if (!cloneCanvas) continue;
+            // Apply blur immediately so paper background shows through on the back face
+            cloneCanvas.style.filter  = "blur(9px)";
+            cloneCanvas.style.opacity = "0.22";
+            // Render bleed-through content — use pre-rendered image if available, else pdfjs
+            const cloneImgUrl = pageImageUrlsRef.current?.[clonePageNum - 1];
+            if (cloneImgUrl) {
+              const img = new window.Image();
+              img.crossOrigin = "anonymous";
+              img.onload = () => {
+                cloneCanvas.width  = img.naturalWidth;
+                cloneCanvas.height = img.naturalHeight;
+                const ctx = cloneCanvas.getContext("2d");
+                if (ctx) ctx.drawImage(img, 0, 0);
+              };
+              img.src = cloneImgUrl;
+            } else if (pdfDocRef.current) {
+              pdfDocRef.current.getPage(clonePageNum).then((page: any) => {
+                const vp  = page.getViewport({ scale: 1 });
+                const dw  = displayWRef.current || 600;
+                const s   = Math.min((dw / vp.width) * 0.35, 1.0);
+                const bvp = page.getViewport({ scale: s });
+                cloneCanvas.width  = Math.round(bvp.width);
+                cloneCanvas.height = Math.round(bvp.height);
+                const ctx = cloneCanvas.getContext("2d");
+                if (ctx) page.render({ canvasContext: ctx, viewport: bvp }).promise.catch(() => {});
+              }).catch(() => {});
+            }
+          }
+        }
+      });
+      obs.observe(wrapOuter, { childList: true, subtree: true });
+      backObserverRef.current = obs;
+
+      // ── Drag-to-flip: lower commit threshold + iframe boundary fix ─
+      // PageFlip's default commit requires dragging almost to the opposite edge,
+      // which feels unresponsive in a small iframe. We watch the state transition
+      // user_fold → read (snap-back) and force a flip ourselves if the drag
+      // distance was ≥30px in a clear direction.
+      //
+      // Additionally: when the mouse leaves the iframe during a drag, PageFlip
+      // sees the boundary position as a completed drag and triggers a spurious
+      // flip. We cancel by dispatching a synthetic mouseup at the viewport centre
+      // so PageFlip snaps back cleanly.
+      let pfState     = "read";
+      let pfPrevState = "read";
+      let dragStartX: number | null = null;
+
+      pf.on("changeState", (e: any) => {
+        pfPrevState = pfState;
+        pfState     = e.data as string;
+      });
+
+      const onMouseDown = (e: MouseEvent) => { dragStartX = e.clientX; };
+      const onMouseUp   = (e: MouseEvent) => {
+        const startX = dragStartX;
+        dragStartX = null;
+        if (startX === null) return;
+        const delta = e.clientX - startX;
+        // PageFlip snapped back (user_fold → read) but drag was intentional: force flip.
+        if (pfState === "read" && pfPrevState === "user_fold" && Math.abs(delta) > 30) {
+          if (delta < 0) pageFlipRef.current?.flipNext?.("bottom");
+          else            pageFlipRef.current?.flipPrev?.("bottom");
+        }
+      };
+      // When mouse leaves the iframe during a drag, cancel the fold cleanly.
+      const onDocMouseLeave = () => {
+        if (pfState === "user_fold") {
+          dragStartX = null; // prevent our threshold logic from also firing
+          document.dispatchEvent(new MouseEvent("mouseup", {
+            bubbles: true, cancelable: true,
+            clientX: (window.innerWidth  || 800) / 2,
+            clientY: (window.innerHeight || 600) / 2,
+          }));
+        }
+      };
+
+      document.addEventListener("mousedown",  onMouseDown);
+      document.addEventListener("mouseup",    onMouseUp);
+      document.addEventListener("mouseleave", onDocMouseLeave);
+      removeFlipHandlers = () => {
+        document.removeEventListener("mousedown",  onMouseDown);
+        document.removeEventListener("mouseup",    onMouseUp);
+        document.removeEventListener("mouseleave", onDocMouseLeave);
+      };
 
       // Pre-render pages around the restore position so they are never blank.
       const restorePage = savedPageRef.current;
@@ -370,6 +548,11 @@ export default function FlipbookCanvas({
       const currentIdx = pageFlipRef.current?.getCurrentPageIndex?.() ?? 0;
       savedPageRef.current = currentIdx + 1;
       cancelled = true;
+      removeFlipHandlers();
+      if (backObserverRef.current) {
+        backObserverRef.current.disconnect();
+        backObserverRef.current = null;
+      }
       if (pageFlipRef.current) {
         try { pageFlipRef.current.destroy?.(); } catch {}
         pageFlipRef.current = null;
@@ -390,24 +573,39 @@ export default function FlipbookCanvas({
     setZoom(clamped);
     zoomRef.current = clamped;
 
-    // Debounce the expensive re-render so it only runs when the user pauses
+    // Debounce re-renders: quality tracking in renderPdfPage auto-detects when
+    // a page needs to be re-rendered at the new zoom level.
     if (reRenderTimer.current) clearTimeout(reRenderTimer.current);
     reRenderTimer.current = setTimeout(() => {
       const idx = pageFlipRef.current?.getCurrentPageIndex?.() ?? 0;
       for (let i = Math.max(1, idx); i <= Math.min(totalPages, idx + 4); i++) {
-        renderedRef.current.delete(i);
         renderPdfPage(i);
       }
     }, 400);
   }, [totalPages, renderPdfPage]);
 
-  // Ctrl + mouse-wheel zooms (standard reader behaviour — Chrome PDF, maps, etc.)
+  // Mouse-wheel: plain scroll → next/prev page; Ctrl/Meta+scroll → zoom.
+  // Sidebars and overlays marked data-sidebar="true" are excluded so they
+  // scroll normally without triggering page navigation.
   useEffect(() => {
+    let scrollLocked = false; // throttle: one page flip per animation duration
+
     const onWheel = (e: WheelEvent) => {
-      if (!e.ctrlKey && !e.metaKey) return;
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const delta = e.deltaY > 0 ? -0.08 : 0.08;
+        applyZoom(Math.max(1, Math.min(3, zoomRef.current + delta)));
+        return;
+      }
+      // Let sidebars and overlays scroll naturally
+      const target = e.target as HTMLElement;
+      if (target.closest('[data-sidebar="true"]')) return;
       e.preventDefault();
-      const delta = e.deltaY > 0 ? -0.08 : 0.08;
-      applyZoom(Math.max(1, Math.min(3, zoomRef.current + delta)));
+      if (scrollLocked) return;
+      scrollLocked = true;
+      setTimeout(() => { scrollLocked = false; }, 500);
+      if (e.deltaY > 0) pageFlipRef.current?.flipNext?.("bottom");
+      else               pageFlipRef.current?.flipPrev?.("bottom");
     };
     window.addEventListener("wheel", onWheel, { passive: false });
     return () => window.removeEventListener("wheel", onWheel);
@@ -423,7 +621,7 @@ export default function FlipbookCanvas({
     // otherwise the turning page shows blank white and looks like no animation.
     const spread = [clamped - 1, clamped, clamped + 1]
       .filter(p => p >= 1 && p <= totalPages);
-    const unrendered = spread.filter(p => !renderedRef.current.has(p));
+    const unrendered = spread.filter(p => !renderedQualityRef.current.has(p));
 
     if (unrendered.length === 0) {
       doFlip();
@@ -551,18 +749,21 @@ export default function FlipbookCanvas({
 
       if (entering) {
         fsTransitionRef.current = false;
-        // Calculate the scale factor the CSS fsZoom will apply, so re-renders
-        // use the matching quality. No PageFlip re-init — CSS handles the size.
         const dw = displayWRef.current || 600;
         const dh = displayHRef.current || 800;
         const fsZoom = Math.min(
           (window.innerWidth - 40) / (dw * (isDoubleRef.current ? 2 : 1)),
           (window.innerHeight - 96) / dh
         );
+        // Set fsZoom BEFORE re-rendering so quality calc uses the new value.
+        // Clear the quality cache for visible pages so the quality check detects
+        // the boost and forces a proper high-res re-render on the current page.
         fsZoomRef.current = fsZoom;
-        // Background re-render visible pages at the boosted quality
-        const cur = (pageFlipRef.current?.getCurrentPageIndex?.() ?? 0) + 1;
+        const cur    = (pageFlipRef.current?.getCurrentPageIndex?.() ?? 0) + 1;
         const spread = isDoubleRef.current ? 2 : 1;
+        for (let p = Math.max(1, cur - 1); p <= Math.min(totalPagesRef.current, cur + spread + 1); p++) {
+          renderedQualityRef.current.delete(p);
+        }
         for (let p = Math.max(1, cur); p <= Math.min(totalPagesRef.current, cur + spread); p++) {
           renderPdfPageRef.current(p, true);
         }
@@ -725,7 +926,7 @@ export default function FlipbookCanvas({
 
         {/* Thumbnails sidebar */}
         {showThumbnails && (
-          <div className="w-48 bg-gray-200 border-r border-gray-300 overflow-y-auto z-10 flex-shrink-0">
+          <div data-sidebar="true" className="w-48 bg-gray-200 border-r border-gray-300 overflow-y-auto z-10 flex-shrink-0">
             <div className="p-2 space-y-2">
               {thumbnails.map((thumb, i) => (
                 <button key={i} onClick={() => goToPageRef.current(i + 1)}
@@ -745,7 +946,7 @@ export default function FlipbookCanvas({
 
         {/* TOC sidebar — always rendered when open; shows helpful message if PDF has no outline */}
         {showToc && (
-          <div className="w-72 bg-gray-100 border-r border-gray-300 z-10 flex-shrink-0 flex flex-col"
+          <div data-sidebar="true" className="w-72 bg-gray-100 border-r border-gray-300 z-10 flex-shrink-0 flex flex-col"
             style={{ minHeight: 0 }}>
             {/* Header */}
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-300 flex-shrink-0">
@@ -872,7 +1073,7 @@ export default function FlipbookCanvas({
 
         {/* Search overlay */}
         {showSearch && (
-          <div className="absolute top-12 right-4 bg-white rounded-lg shadow-xl p-3 z-30 w-80 border border-gray-200">
+          <div data-sidebar="true" className="absolute top-12 right-4 bg-white rounded-lg shadow-xl p-3 z-30 w-80 border border-gray-200">
             <div className="flex items-center gap-1">
               <Input value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
                 onKeyDown={handleSearchKeyDown}

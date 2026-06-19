@@ -17,7 +17,7 @@ ENV NEXT_OUTPUT_MODE=standalone
 RUN npm run build
 
 FROM base AS runner
-RUN apk add --no-cache openssl
+RUN apk add --no-cache openssl poppler-utils
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -31,8 +31,9 @@ COPY --from=builder --chown=nextjs:nodejs /app/node_modules/.prisma ./node_modul
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/@prisma ./node_modules/@prisma
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/prisma ./node_modules/prisma
 COPY --from=builder /app/prisma ./prisma
+COPY --from=builder --chown=nextjs:nodejs /app/scripts/db-migrate.js ./scripts/db-migrate.js
 USER nextjs
 EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
-CMD ["node", "server.js"]
+CMD ["sh", "-c", "node scripts/db-migrate.js && node server.js"]

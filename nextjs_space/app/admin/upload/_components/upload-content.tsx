@@ -15,7 +15,8 @@ export default function UploadContent() {
   const [description, setDescription] = useState("");
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [status, setStatus] = useState<"idle" | "uploading" | "processing" | "done" | "error">("idle");
+  const [status, setStatus] = useState<"idle" | "uploading" | "processing" | "rendering" | "done" | "error">("idle");
+  const [renderProgress, setRenderProgress] = useState<{ page: number; total: number } | null>(null);
   const [error, setError] = useState("");
   const [dragOver, setDragOver] = useState(false);
 
@@ -133,6 +134,37 @@ export default function UploadContent() {
         }
       }
 
+      // Render all pages server-side (streams progress via SSE)
+      if (flipbook?.id) {
+        setStatus("rendering");
+        setRenderProgress(null);
+        try {
+          const renderRes = await fetch(`/api/flipbooks/${flipbook.id}/render`, { method: "POST" });
+          const reader = renderRes.body?.getReader();
+          if (reader) {
+            const dec = new TextDecoder();
+            let buf = "";
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buf += dec.decode(value, { stream: true });
+              const lines = buf.split("\n");
+              buf = lines.pop() ?? "";
+              for (const line of lines) {
+                if (!line.startsWith("data: ")) continue;
+                try {
+                  const ev = JSON.parse(line.slice(6));
+                  if (ev.status === "progress") setRenderProgress({ page: ev.page, total: ev.total });
+                  if (ev.status === "done" || ev.status === "failed") break;
+                } catch {}
+              }
+            }
+          }
+        } catch {
+          // Rendering failed silently — viewer falls back to pdfjs
+        }
+      }
+
       setStatus("done");
       setTimeout(() => {
         router.replace(`/admin/flipbooks/${flipbook?.id ?? ""}`);
@@ -229,6 +261,36 @@ export default function UploadContent() {
             </div>
           )}
 
+          {status === "rendering" && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-sm">
+                <span>
+                  {renderProgress
+                    ? `Rendering pages: ${renderProgress.page} / ${renderProgress.total}`
+                    : "Preparing pages..."}
+                </span>
+                <span>
+                  {renderProgress ? Math.round((renderProgress.page / renderProgress.total) * 100) : 0}%
+                </span>
+              </div>
+              <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                <motion.div
+                  className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full"
+                  initial={{ width: 0 }}
+                  animate={{
+                    width: renderProgress
+                      ? `${Math.round((renderProgress.page / renderProgress.total) * 100)}%`
+                      : "0%",
+                  }}
+                  transition={{ duration: 0.3 }}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Pre-rendering pages for instant loading — this takes a moment for large PDFs.
+              </p>
+            </div>
+          )}
+
           {status === "done" && (
             <div className="bg-green-50 text-green-700 p-3 rounded-lg text-sm flex items-center gap-2">
               <CheckCircle className="w-4 h-4" /> Flipbook created successfully! Redirecting...
@@ -237,12 +299,12 @@ export default function UploadContent() {
 
           <Button
             onClick={handleUpload}
-            disabled={!file || uploading || status === "done"}
+            disabled={!file || uploading || status === "rendering" || status === "done"}
             className="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700"
             size="lg"
           >
-            {uploading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Upload className="w-4 h-4 mr-2" />}
-            {uploading ? "Uploading..." : "Create Flipbook"}
+            {(uploading || status === "rendering") ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Upload className="w-4 h-4 mr-2" />}
+            {status === "rendering" ? "Rendering pages..." : uploading ? "Uploading..." : "Create Flipbook"}
           </Button>
         </CardContent>
       </Card>
