@@ -9,3 +9,4 @@ node_modules
 .dockerignore
 Dockerfile
 scripts
+!scripts/db-migrate.js
