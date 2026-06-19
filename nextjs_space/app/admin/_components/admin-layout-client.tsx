@@ -3,12 +3,13 @@ import { useState } from "react";
 import { useSession, signOut } from "next-auth/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BookOpen, LayoutDashboard, Upload, Settings, LogOut, Menu, X, BarChart3 } from "lucide-react";
+import { BookOpen, LayoutDashboard, Upload, Settings, LogOut, Menu, X, FolderOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const navItems = [
   { href: "/admin", label: "Dashboard", icon: LayoutDashboard },
   { href: "/admin/upload", label: "Upload", icon: Upload },
+  { href: "/admin/folders", label: "Folders", icon: FolderOpen },
   { href: "/admin/branding", label: "Branding", icon: Settings },
 ];
 

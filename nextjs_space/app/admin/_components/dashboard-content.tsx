@@ -302,21 +302,26 @@ export default function DashboardContent() {
                   <CardContent className="p-4">
                     <h4 className="font-semibold text-base truncate">{fb?.title ?? "Untitled"}</h4>
                     <p className="text-sm text-muted-foreground mt-1">{fb?.pageCount ?? 0} pages · {fb?._count?.views ?? 0} views</p>
-                    <div className="flex items-center gap-2 mt-3 flex-wrap">
-                      <Button variant="outline" size="sm" onClick={() => copyLink(fb?.uuid ?? "")}>
-                        <Copy className="w-3 h-3 mr-1" /> Link
+                    {/* Primary actions */}
+                    <div className="grid grid-cols-3 gap-1.5 mt-3">
+                      <Button variant="outline" size="sm" className="w-full" onClick={() => copyLink(fb?.uuid ?? "")}>
+                        <Copy className="w-3 h-3 mr-1.5" /> Link
                       </Button>
-                      <Link href={`/view/${fb?.uuid ?? ""}`} target="_blank">
-                        <Button variant="outline" size="sm"><ExternalLink className="w-3 h-3 mr-1" /> View</Button>
+                      <Link href={`/view/${fb?.uuid ?? ""}`} target="_blank" className="contents">
+                        <Button variant="outline" size="sm" className="w-full"><ExternalLink className="w-3 h-3 mr-1.5" /> View</Button>
                       </Link>
-                      <Button variant="outline" size="sm" onClick={() => openReplaceModal(fb)} title="Replace PDF">
-                        <Upload className="w-3 h-3 mr-1" /> Replace
+                      <Button variant="outline" size="sm" className="w-full" onClick={() => openReplaceModal(fb)}>
+                        <Upload className="w-3 h-3 mr-1.5" /> Replace
                       </Button>
-                      <Link href={`/admin/flipbooks/${fb?.id}`}>
-                        <Button variant="outline" size="sm"><Settings className="w-3 h-3" /></Button>
+                    </div>
+                    {/* Management actions */}
+                    <div className="flex items-center justify-between mt-1.5">
+                      <Link href={`/admin/flipbooks/${fb?.id}`} className="flex-1 mr-1.5">
+                        <Button variant="outline" size="sm" className="w-full"><Settings className="w-3 h-3 mr-1.5" /> Settings</Button>
                       </Link>
-                      <Button variant="outline" size="sm" onClick={() => handleDelete(fb?.id ?? "")} className="text-red-500 hover:text-red-700 ml-auto">
-                        <Trash2 className="w-3 h-3" />
+                      <Button variant="outline" size="sm" onClick={() => handleDelete(fb?.id ?? "")}
+                        className="text-red-500 hover:text-red-700 hover:bg-red-50 border-red-200">
+                        <Trash2 className="w-3 h-3 mr-1.5" /> Delete
                       </Button>
                     </div>
                   </CardContent>
@@ -356,19 +361,20 @@ export default function DashboardContent() {
 
                   <div className="flex items-center gap-1.5 flex-shrink-0">
                     <Button variant="outline" size="sm" onClick={() => copyLink(fb?.uuid ?? "")}>
-                      <Copy className="w-3 h-3 mr-1" /> Link
+                      <Copy className="w-3 h-3 mr-1.5" /> Link
                     </Button>
                     <Link href={`/view/${fb?.uuid ?? ""}`} target="_blank">
-                      <Button variant="outline" size="sm"><ExternalLink className="w-3 h-3 mr-1" /> View</Button>
+                      <Button variant="outline" size="sm"><ExternalLink className="w-3 h-3 mr-1.5" /> View</Button>
                     </Link>
-                    <Button variant="outline" size="sm" onClick={() => openReplaceModal(fb)} title="Replace PDF">
-                      <Upload className="w-3 h-3 mr-1" /> Replace
+                    <Button variant="outline" size="sm" onClick={() => openReplaceModal(fb)}>
+                      <Upload className="w-3 h-3 mr-1.5" /> Replace
                     </Button>
                     <Link href={`/admin/flipbooks/${fb?.id}`}>
-                      <Button variant="outline" size="sm"><Settings className="w-3 h-3 mr-1" /> Settings</Button>
+                      <Button variant="outline" size="sm"><Settings className="w-3 h-3 mr-1.5" /> Settings</Button>
                     </Link>
-                    <Button variant="outline" size="sm" onClick={() => handleDelete(fb?.id ?? "")} className="text-red-500 hover:text-red-700">
-                      <Trash2 className="w-3 h-3" />
+                    <Button variant="outline" size="sm" onClick={() => handleDelete(fb?.id ?? "")}
+                      className="text-red-500 hover:text-red-700 hover:bg-red-50 border-red-200">
+                      <Trash2 className="w-3 h-3 mr-1.5" /> Delete
                     </Button>
                   </div>
                 </motion.div>
