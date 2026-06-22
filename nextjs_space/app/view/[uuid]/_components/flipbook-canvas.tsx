@@ -39,6 +39,7 @@ export default function FlipbookCanvas({
   // ── Refs ──────────────────────────────────────────────────────────
   const containerRef  = useRef<HTMLDivElement>(null); // fullscreen root
   const bookWrapRef   = useRef<HTMLDivElement>(null); // PageFlip mounts here
+  const bookAreaRef   = useRef<HTMLDivElement>(null); // book area container (for overlay positioning)
   const pageFlipRef   = useRef<any>(null);
   const pdfDocRef     = useRef<any>(null);
   const renderedQualityRef = useRef<Map<number, number>>(new Map()); // page → quality it was rendered at
@@ -94,17 +95,23 @@ export default function FlipbookCanvas({
   const [isSearching,    setIsSearching]    = useState(false);
   const [searchPerformed,setSearchPerformed]= useState(false);
   const [jumpPage,       setJumpPage]       = useState("");
+  interface PrevFlipState { dataUrl: string; x: number; y: number; w: number; h: number; }
+  const [prevFlipData,   setPrevFlipData]   = useState<PrevFlipState | null>(null);
+  const prevFlipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const primaryColor = branding?.primaryColor ?? "#4F46E5";
 
-  // ── Paper-back CSS ────────────────────────────────────────────────
-  // Inject once: gives page divs a paper background via class so it survives
-  // PageFlip's style.cssText overrides during animation, and carries through
-  // to cloneNode copies (used as the back face during soft-page flips).
+  // ── Paper-back CSS + prev-flip keyframes ─────────────────────────
   useEffect(() => {
     const s = document.createElement("style");
     s.dataset.id = "flipbook-page-styles";
-    s.textContent = ".fb-page { background: linear-gradient(160deg,#f7f3ee 0%,#ede8e2 100%); }";
+    s.textContent = `
+      .fb-page { background: linear-gradient(160deg,#f7f3ee 0%,#ede8e2 100%); }
+      @keyframes fb-prev-flip {
+        0%   { transform: rotateY(0deg); }
+        100% { transform: rotateY(-180deg); }
+      }
+    `;
     document.head.appendChild(s);
     return () => s.remove();
   }, []);
@@ -567,6 +574,7 @@ export default function FlipbookCanvas({
   // scrolling with Ctrl+wheel feels immediate.
   const reRenderTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (reRenderTimer.current) clearTimeout(reRenderTimer.current); }, []);
+  useEffect(() => () => { if (prevFlipTimerRef.current) clearTimeout(prevFlipTimerRef.current); }, []);
 
   const applyZoom = useCallback((next: number) => {
     const clamped = Math.max(1, Math.min(3, next));
@@ -635,7 +643,37 @@ export default function FlipbookCanvas({
   useEffect(() => { goToPageRef.current = goToPage; }, [goToPage]);
 
   const nextPage = useCallback(() => pageFlipRef.current?.flipNext?.("bottom"), []);
-  const prevPage = useCallback(() => pageFlipRef.current?.flipPrev?.("bottom"), []);
+  const prevPage = useCallback(() => {
+    const pf = pageFlipRef.current;
+    if (!pf) return;
+    // In single-page mode, capture the current page and play a CSS right-fold
+    // overlay so backward navigation looks identical to forward (paper curl).
+    // The library's own flipPrev animation still runs underneath but is hidden.
+    if (!isDoubleRef.current && enableAnimatedFlip) {
+      const idx = pf.getCurrentPageIndex?.() ?? 0;
+      if (idx > 0) {
+        try {
+          const canvas = canvasesRef.current[idx];
+          const bookAreaEl = bookAreaRef.current;
+          if (canvas && bookAreaEl) {
+            const cRect = canvas.getBoundingClientRect();
+            const aRect = bookAreaEl.getBoundingClientRect();
+            const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
+            if (prevFlipTimerRef.current) clearTimeout(prevFlipTimerRef.current);
+            setPrevFlipData({
+              dataUrl,
+              x: cRect.left - aRect.left,
+              y: cRect.top - aRect.top,
+              w: cRect.width,
+              h: cRect.height,
+            });
+            prevFlipTimerRef.current = setTimeout(() => setPrevFlipData(null), 850);
+          }
+        } catch {}
+      }
+    }
+    pf.flipPrev?.("bottom");
+  }, [enableAnimatedFlip]);
 
   // ── Keyboard ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -984,7 +1022,7 @@ export default function FlipbookCanvas({
         )}
 
         {/* ── Book area ───────────────────────────────────────── */}
-        <div className="flex-1 flex items-center justify-center overflow-hidden relative">
+        <div ref={bookAreaRef} className="flex-1 flex items-center justify-center overflow-hidden relative">
 
           {/* Arrow nav — kept for accessibility; PageFlip also handles drag/swipe */}
           <button onClick={prevPage} disabled={currentPage <= 1}
@@ -1012,8 +1050,13 @@ export default function FlipbookCanvas({
             />
           )}
 
-          {/* PageFlip container — hidden until ready so page-1 never flashes */}
-          <div style={{ opacity: bookVisible ? 1 : 0 }}>
+          {/* PageFlip container — hidden until ready so page-1 never flashes.
+              Fade-in is smooth (0.2s); fade-out is instant so the spinner
+              replaces the book without a half-transparent overlap. */}
+          <div style={{
+            opacity: bookVisible ? 1 : 0,
+            transition: bookVisible ? 'opacity 0.2s ease' : 'none',
+          }}>
           {(() => {
             // Common zoom calculation for both modes
             const fsZoom = isFullscreen && displayW > 0 && displayH > 0
@@ -1029,13 +1072,22 @@ export default function FlipbookCanvas({
             let clipStyle: React.CSSProperties = {};
             let innerStyle: React.CSSProperties;
 
+            // Shared easing for both single and double-page modes.
+            // bookReady:false suppresses the transition during re-init so the
+            // book snaps to its new size instantly instead of sliding from the
+            // old (wrong) position. bookReady:true allows smooth zoom and
+            // fullscreen-enter/exit scale transitions.
+            const transformTransition = bookReady
+              ? 'transform 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94)'
+              : 'none';
+
             if (!isDouble && displayW > 0) {
               // ── SINGLE-PAGE MODE (usePortrait:true — PageFlip renders natively) ──
-              // No CSS clipping; PageFlip advances 1 page per flip in portrait mode.
               clipStyle = {};
               innerStyle = {
                 transform: `scale(${totalZoom})`,
                 transformOrigin: 'center center',
+                transition: transformTransition,
               };
             } else {
               // ── DOUBLE-PAGE MODE ──
@@ -1048,9 +1100,7 @@ export default function FlipbookCanvas({
               innerStyle = {
                 transform: `translateX(${coverShift * totalZoom}px) scale(${totalZoom})`,
                 transformOrigin: 'center center',
-                // Suppress transition during re-init so the book snaps to the new
-                // size instantly rather than sliding from the old position.
-                transition: bookReady ? 'transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94)' : 'none',
+                transition: transformTransition,
               };
             }
 
@@ -1063,6 +1113,36 @@ export default function FlipbookCanvas({
             );
           })()}
           </div>
+
+          {/* ── Backward-flip overlay ────────────────────────────────────
+              Replaces the page-flip library's "slide-in from left" with a
+              proper paper-curl-back animation. Captures the current page as
+              a JPEG and rotates it from left-edge origin (0° → -180°).
+              backface-visibility:hidden makes it vanish at 90° so the
+              previous page (already rendered by the library) is revealed. */}
+          {prevFlipData && !isDouble && (
+            <div style={{
+              position: "absolute",
+              left: prevFlipData.x + "px",
+              top: prevFlipData.y + "px",
+              width: prevFlipData.w + "px",
+              height: prevFlipData.h + "px",
+              perspective: "1400px",
+              perspectiveOrigin: "0% 50%",
+              zIndex: 100,
+              pointerEvents: "none",
+            }}>
+              <div style={{
+                width: "100%",
+                height: "100%",
+                backgroundImage: `url(${prevFlipData.dataUrl})`,
+                backgroundSize: "100% 100%",
+                transformOrigin: "left center",
+                animation: "fb-prev-flip 800ms ease-in-out forwards",
+                backfaceVisibility: "hidden",
+              }} />
+            </div>
+          )}
 
           {!bookReady && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
