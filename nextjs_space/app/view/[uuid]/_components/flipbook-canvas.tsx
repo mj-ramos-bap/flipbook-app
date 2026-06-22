@@ -95,8 +95,7 @@ export default function FlipbookCanvas({
   const [isSearching,    setIsSearching]    = useState(false);
   const [searchPerformed,setSearchPerformed]= useState(false);
   const [jumpPage,       setJumpPage]       = useState("");
-  interface PrevFlipState { dataUrl: string; x: number; y: number; w: number; h: number; }
-  const [prevFlipData,   setPrevFlipData]   = useState<PrevFlipState | null>(null);
+  const [prevFlipData,   setPrevFlipData]   = useState<string | null>(null);
   const prevFlipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const primaryColor = branding?.primaryColor ?? "#4F46E5";
@@ -654,19 +653,10 @@ export default function FlipbookCanvas({
       if (idx > 0) {
         try {
           const canvas = canvasesRef.current[idx];
-          const bookAreaEl = bookAreaRef.current;
-          if (canvas && bookAreaEl) {
-            const cRect = canvas.getBoundingClientRect();
-            const aRect = bookAreaEl.getBoundingClientRect();
+          if (canvas) {
             const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
             if (prevFlipTimerRef.current) clearTimeout(prevFlipTimerRef.current);
-            setPrevFlipData({
-              dataUrl,
-              x: cRect.left - aRect.left,
-              y: cRect.top - aRect.top,
-              w: cRect.width,
-              h: cRect.height,
-            });
+            setPrevFlipData(dataUrl);
             prevFlipTimerRef.current = setTimeout(() => setPrevFlipData(null), 850);
           }
         } catch {}
@@ -1085,6 +1075,7 @@ export default function FlipbookCanvas({
               // ── SINGLE-PAGE MODE (usePortrait:true — PageFlip renders natively) ──
               clipStyle = {};
               innerStyle = {
+                position: 'relative',
                 transform: `scale(${totalZoom})`,
                 transformOrigin: 'center center',
                 transition: transformTransition,
@@ -1098,6 +1089,7 @@ export default function FlipbookCanvas({
                 : 0;
 
               innerStyle = {
+                position: 'relative',
                 transform: `translateX(${coverShift * totalZoom}px) scale(${totalZoom})`,
                 transformOrigin: 'center center',
                 transition: transformTransition,
@@ -1108,41 +1100,38 @@ export default function FlipbookCanvas({
               <div style={clipStyle}>
                 <div style={innerStyle}>
                   <div ref={bookWrapRef} />
+                  {/* Backward-flip overlay — rendered inside the same scaled container
+                      as the book so it shares the exact transform context and needs
+                      no position math. Covers left:0/top:0 = same as the page. */}
+                  {prevFlipData && !isDouble && (
+                    <div style={{
+                      position: "absolute",
+                      left: 0,
+                      top: 0,
+                      width: displayW + "px",
+                      height: displayH + "px",
+                      perspective: "1400px",
+                      perspectiveOrigin: "0% 50%",
+                      zIndex: 100,
+                      pointerEvents: "none",
+                    }}>
+                      <div style={{
+                        width: "100%",
+                        height: "100%",
+                        backgroundImage: `url(${prevFlipData})`,
+                        backgroundSize: "100% 100%",
+                        transformOrigin: "left center",
+                        animation: "fb-prev-flip 800ms ease-in-out forwards",
+                        backfaceVisibility: "hidden",
+                      }} />
+                    </div>
+                  )}
                 </div>
               </div>
             );
           })()}
           </div>
 
-          {/* ── Backward-flip overlay ────────────────────────────────────
-              Replaces the page-flip library's "slide-in from left" with a
-              proper paper-curl-back animation. Captures the current page as
-              a JPEG and rotates it from left-edge origin (0° → -180°).
-              backface-visibility:hidden makes it vanish at 90° so the
-              previous page (already rendered by the library) is revealed. */}
-          {prevFlipData && !isDouble && (
-            <div style={{
-              position: "absolute",
-              left: prevFlipData.x + "px",
-              top: prevFlipData.y + "px",
-              width: prevFlipData.w + "px",
-              height: prevFlipData.h + "px",
-              perspective: "1400px",
-              perspectiveOrigin: "0% 50%",
-              zIndex: 100,
-              pointerEvents: "none",
-            }}>
-              <div style={{
-                width: "100%",
-                height: "100%",
-                backgroundImage: `url(${prevFlipData.dataUrl})`,
-                backgroundSize: "100% 100%",
-                transformOrigin: "left center",
-                animation: "fb-prev-flip 800ms ease-in-out forwards",
-                backfaceVisibility: "hidden",
-              }} />
-            </div>
-          )}
 
           {!bookReady && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
