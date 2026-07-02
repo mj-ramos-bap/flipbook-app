@@ -30,20 +30,36 @@ async function uploadToGcs(
   contentType: string
 ): Promise<void> {
   const token = await getGcsToken();
-  const encodedPath = objectPath.split('/').map(encodeURIComponent).join('/');
-  const url = `https://storage.googleapis.com/upload/storage/v1/b/${encodeURIComponent(bucketName)}/o?uploadType=media&name=${encodeURIComponent(objectPath)}`;
+  // Multipart upload so we can set Cache-Control metadata: without it GCS serves
+  // signed-URL responses as uncacheable and browsers re-download every page image
+  // on every visit. max-age is kept at 1h so a "Replace PDF" (which overwrites
+  // these same object paths) propagates to viewers within the hour.
+  const metadata = JSON.stringify({
+    name: objectPath,
+    contentType,
+    cacheControl: 'public, max-age=3600',
+  });
+  const boundary = 'gcs_upload_boundary_7f3a91';
+  const body = Buffer.concat([
+    Buffer.from(
+      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n--${boundary}\r\nContent-Type: ${contentType}\r\n\r\n`
+    ),
+    data,
+    Buffer.from(`\r\n--${boundary}--`),
+  ]);
+  const url = `https://storage.googleapis.com/upload/storage/v1/b/${encodeURIComponent(bucketName)}/o?uploadType=multipart`;
   const res = await fetch(url, {
     method: 'POST',
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      'Content-Type': contentType,
-      'Content-Length': String(data.length),
+      'Content-Type': `multipart/related; boundary=${boundary}`,
+      'Content-Length': String(body.length),
     },
-    body: data,
+    body,
   });
   if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`GCS upload failed: ${res.status} ${body}`);
+    const resBody = await res.text().catch(() => '');
+    throw new Error(`GCS upload failed: ${res.status} ${resBody}`);
   }
 }
 
@@ -71,8 +87,8 @@ export async function renderFlipbookPages(
     const outPrefix = join(tmpDir, 'page');
     await execFileAsync('pdftoppm', [
       '-jpeg',
-      '-r', '150',
-      '-jpegopt', 'quality=85',
+      '-r', '220',
+      '-jpegopt', 'quality=88',
       pdfPath,
       outPrefix,
     ]);

@@ -51,8 +51,8 @@ export async function GET(req: Request, { params }: { params: { uuid: string } }
       isRendered && renderedCount > 0
         ? generateGcsSignedUrls(
             bucketName,
-            Array.from({ length: renderedCount }, (_, i) => `rendered/${flipbook.uuid}/p${i + 1}.jpg`),
-            3600 // 1-hour validity
+            // URLs are stable within a 12h window and valid 12–24h (see gcs-auth)
+            Array.from({ length: renderedCount }, (_, i) => `rendered/${flipbook.uuid}/p${i + 1}.jpg`)
           )
         : Promise.resolve(null),
       prisma.brandingSettings.findFirst(),

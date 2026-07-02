@@ -20,6 +20,28 @@ steps:
       - 'australia-southeast1-docker.pkg.dev/flipbook-498103/flipbook-repo/flipbook-app'
     waitFor: ['build']
 
+  # Run DB migrations as a one-off Cloud Run Job (keeps them out of container
+  # startup so cold starts are fast)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: migrate
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        gcloud run jobs deploy flipbook-migrate \
+          --image australia-southeast1-docker.pkg.dev/flipbook-498103/flipbook-repo/flipbook-app:$COMMIT_SHA \
+          --region australia-southeast1 \
+          --set-cloudsql-instances flipbook-498103:australia-southeast1:flipbook-db \
+          --service-account flipbook-runner@flipbook-498103.iam.gserviceaccount.com \
+          --set-secrets DATABASE_URL=DATABASE_URL:latest \
+          --memory 512Mi \
+          --max-retries 1 \
+          --command node \
+          --args scripts/db-migrate.js \
+          --execute-now \
+          --wait
+    waitFor: ['push']
+
   # Deploy to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     id: deploy
@@ -33,15 +55,16 @@ steps:
           --platform managed \
           --add-cloudsql-instances flipbook-498103:australia-southeast1:flipbook-db \
           --service-account flipbook-runner@flipbook-498103.iam.gserviceaccount.com \
-          --min-instances 1 \
+          --min-instances 0 \
           --max-instances 10 \
           --memory 1Gi \
           --cpu 1 \
+          --cpu-boost \
           --port 3000 \
           --allow-unauthenticated \
           --update-secrets DATABASE_URL=DATABASE_URL:latest,NEXTAUTH_SECRET=NEXTAUTH_SECRET:latest,NEXTAUTH_URL=NEXTAUTH_URL:latest,GCS_BUCKET_NAME=GCS_BUCKET_NAME:latest,GCS_HMAC_ACCESS_ID=GCS_HMAC_ACCESS_ID:latest,GCS_HMAC_SECRET=GCS_HMAC_SECRET:latest \
           --update-env-vars NODE_ENV=production
-    waitFor: ['push']
+    waitFor: ['migrate']
 
 images:
   - 'australia-southeast1-docker.pkg.dev/flipbook-498103/flipbook-repo/flipbook-app:$COMMIT_SHA'
