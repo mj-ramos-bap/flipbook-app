@@ -2,7 +2,11 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { BookOpen, Eye, Users, Clock, Plus, Settings, Share2, Trash2, Copy, ExternalLink, Loader2, LayoutGrid, List, Upload, RefreshCw, FileText, X, AlertCircle, Check } from "lucide-react";
+import {
+  BookOpen, Eye, Users, Clock, Plus, Settings, Trash2, Copy, ExternalLink,
+  Loader2, LayoutGrid, List, Upload, RefreshCw, FileText, X, AlertCircle,
+  Check, FolderOpen,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { motion, AnimatePresence } from "framer-motion";
@@ -17,7 +21,14 @@ interface FlipbookItem {
   status: string;
   createdAt: string;
   thumbnailUrl: string | null;
+  folderId: string | null;
   _count: { views: number };
+}
+
+interface Folder {
+  id: string;
+  name: string;
+  _count: { flipbooks: number };
 }
 
 export default function DashboardContent() {
@@ -25,6 +36,12 @@ export default function DashboardContent() {
   const [stats, setStats] = useState<any>({});
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [folders, setFolders] = useState<Folder[]>([]);
+  const [selectedFolderIds, setSelectedFolderIds] = useState<string[]>([]);
+
+  // ── Move modal state ─────────────────────────────────────────────
+  const [moveTarget, setMoveTarget] = useState<FlipbookItem | null>(null);
+  const [isMoving, setIsMoving] = useState(false);
 
   // ── Replace PDF modal state ──────────────────────────────────────
   const [replaceTarget, setReplaceTarget] = useState<FlipbookItem | null>(null);
@@ -39,14 +56,17 @@ export default function DashboardContent() {
 
   const fetchData = async () => {
     try {
-      const [fbRes, statsRes] = await Promise.all([
+      const [fbRes, statsRes, foldersRes] = await Promise.all([
         fetch("/api/flipbooks"),
         fetch("/api/analytics/overview"),
+        fetch("/api/folders"),
       ]);
       const fbData = await fbRes.json();
       const statsData = await statsRes.json();
+      const foldersData = await foldersRes.json();
       setFlipbooks(fbData?.flipbooks ?? []);
       setStats(statsData ?? {});
+      setFolders(foldersData?.folders ?? []);
     } catch (e: any) {
       console.error("Failed to load dashboard", e);
     } finally {
@@ -73,6 +93,47 @@ export default function DashboardContent() {
     toast.success("Link copied to clipboard");
   };
 
+  const toggleFolderFilter = (id: string) => {
+    setSelectedFolderIds(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  };
+
+  const filteredFlipbooks = selectedFolderIds.length === 0
+    ? flipbooks
+    : flipbooks.filter(fb => {
+        if (selectedFolderIds.includes("__none__") && fb.folderId === null) return true;
+        if (fb.folderId && selectedFolderIds.includes(fb.folderId)) return true;
+        return false;
+      });
+
+  const handleMove = async (folderId: string | null) => {
+    if (!moveTarget) return;
+    setIsMoving(true);
+    try {
+      const res = await fetch(`/api/flipbooks/${moveTarget.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folderId }),
+      });
+      if (!res.ok) throw new Error("Failed");
+      const prevFolderId = moveTarget.folderId;
+      setFlipbooks(prev => prev.map(f => f.id === moveTarget.id ? { ...f, folderId } : f));
+      setFolders(prev => prev.map(f => {
+        if (f.id === prevFolderId) return { ...f, _count: { flipbooks: Math.max(0, f._count.flipbooks - 1) } };
+        if (f.id === folderId) return { ...f, _count: { flipbooks: f._count.flipbooks + 1 } };
+        return f;
+      }));
+      const folderName = folderId ? folders.find(f => f.id === folderId)?.name ?? "folder" : "No Folder";
+      toast.success(`Moved to "${folderName}"`);
+      setMoveTarget(null);
+    } catch {
+      toast.error("Failed to move flipbook");
+    } finally {
+      setIsMoving(false);
+    }
+  };
+
   const openReplaceModal = (fb: FlipbookItem) => {
     setReplaceTarget(fb);
     setReplaceFile(null);
@@ -97,7 +158,6 @@ export default function DashboardContent() {
     setReplaceRenderProgress(null);
 
     try {
-      // 1. Upload new PDF to GCS
       const uploadRes = await fetch("/api/upload/direct", {
         method: "POST",
         headers: {
@@ -112,7 +172,6 @@ export default function DashboardContent() {
 
       setReplaceStatus("processing");
 
-      // 2. Generate new thumbnail + page count via pdfjs
       let newPageCount = 0;
       let newThumbnailPath: string | null = null;
       try {
@@ -140,7 +199,6 @@ export default function DashboardContent() {
         if (thumbRes.ok) newThumbnailPath = ((await thumbRes.json()) ?? {}).cloud_storage_path ?? null;
       } catch {}
 
-      // 3. Patch flipbook — uuid/id unchanged, new cloudStoragePath
       await fetch(`/api/flipbooks/${replaceTarget.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -153,7 +211,6 @@ export default function DashboardContent() {
         }),
       });
 
-      // 4. Re-render pages (SSE stream)
       setReplaceStatus("rendering");
       try {
         const renderRes = await fetch(`/api/flipbooks/${replaceTarget.id}/render`, { method: "POST" });
@@ -179,7 +236,6 @@ export default function DashboardContent() {
       } catch {}
 
       setReplaceStatus("done");
-      // Update card in list with new page count
       if (newPageCount > 0) {
         setFlipbooks((prev) => prev.map((f) =>
           f.id === replaceTarget.id ? { ...f, pageCount: newPageCount } : f
@@ -209,6 +265,7 @@ export default function DashboardContent() {
   ];
 
   const isBusy = replaceStatus === "uploading" || replaceStatus === "processing" || replaceStatus === "rendering";
+  const hasUnassigned = flipbooks.some(fb => !fb.folderId);
 
   return (
     <div className="space-y-8">
@@ -270,6 +327,43 @@ export default function DashboardContent() {
           )}
         </div>
 
+        {/* ── Folder filter chips ──────────────────────────────────── */}
+        {folders.length > 0 && (
+          <div className="flex items-center gap-2 flex-wrap mb-4">
+            <button
+              onClick={() => setSelectedFolderIds([])}
+              className={`px-3 py-1 rounded-full text-xs font-medium transition-colors border ${
+                selectedFolderIds.length === 0
+                  ? "bg-indigo-600 text-white border-indigo-600"
+                  : "bg-white text-gray-600 border-gray-200 hover:border-indigo-300 hover:text-indigo-600"
+              }`}
+            >All</button>
+            {folders.map(f => (
+              <button
+                key={f.id}
+                onClick={() => toggleFolderFilter(f.id)}
+                className={`px-3 py-1 rounded-full text-xs font-medium transition-colors border ${
+                  selectedFolderIds.includes(f.id)
+                    ? "bg-indigo-600 text-white border-indigo-600"
+                    : "bg-white text-gray-600 border-gray-200 hover:border-indigo-300 hover:text-indigo-600"
+                }`}
+              >
+                {f.name}
+              </button>
+            ))}
+            {hasUnassigned && (
+              <button
+                onClick={() => toggleFolderFilter("__none__")}
+                className={`px-3 py-1 rounded-full text-xs font-medium transition-colors border ${
+                  selectedFolderIds.includes("__none__")
+                    ? "bg-gray-700 text-white border-gray-700"
+                    : "bg-white text-gray-600 border-gray-200 hover:border-gray-400 hover:text-gray-800"
+                }`}
+              >No Folder</button>
+            )}
+          </div>
+        )}
+
         {(flipbooks?.length ?? 0) === 0 ? (
           <Card className="border-dashed border-2">
             <CardContent className="p-12 text-center">
@@ -280,9 +374,17 @@ export default function DashboardContent() {
               </Link>
             </CardContent>
           </Card>
+        ) : filteredFlipbooks.length === 0 ? (
+          <div className="text-center py-16 text-muted-foreground">
+            <FolderOpen className="w-10 h-10 mx-auto mb-3 text-gray-300" />
+            <p className="text-sm">No flipbooks in the selected folder{selectedFolderIds.length > 1 ? "s" : ""}.</p>
+            <button onClick={() => setSelectedFolderIds([])} className="text-indigo-600 text-xs mt-2 hover:underline">
+              Clear filter
+            </button>
+          </div>
         ) : viewMode === "grid" ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {flipbooks?.map?.((fb: FlipbookItem, i: number) => (
+            {filteredFlipbooks?.map?.((fb: FlipbookItem, i: number) => (
               <motion.div key={fb?.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}>
                 <Card className="border-0 shadow-md hover:shadow-lg transition-shadow overflow-hidden group">
                   <div className="relative aspect-[4/3] bg-gradient-to-br from-indigo-100 to-purple-100">
@@ -302,7 +404,7 @@ export default function DashboardContent() {
                   <CardContent className="p-4">
                     <h4 className="font-semibold text-base truncate">{fb?.title ?? "Untitled"}</h4>
                     <p className="text-sm text-muted-foreground mt-1">{fb?.pageCount ?? 0} pages · {fb?._count?.views ?? 0} views</p>
-                    {/* Primary actions */}
+                    {/* Row 1: Link / View / Replace */}
                     <div className="grid grid-cols-3 gap-1.5 mt-3">
                       <Button variant="outline" size="sm" className="w-full" onClick={() => copyLink(fb?.uuid ?? "")}>
                         <Copy className="w-3 h-3 mr-1.5" /> Link
@@ -314,13 +416,16 @@ export default function DashboardContent() {
                         <Upload className="w-3 h-3 mr-1.5" /> Replace
                       </Button>
                     </div>
-                    {/* Management actions */}
-                    <div className="flex items-center justify-between mt-1.5">
-                      <Link href={`/admin/flipbooks/${fb?.id}`} className="flex-1 mr-1.5">
+                    {/* Row 2: Move / Settings / Delete */}
+                    <div className="grid grid-cols-3 gap-1.5 mt-1.5">
+                      <Button variant="outline" size="sm" className="w-full" onClick={() => setMoveTarget(fb)}>
+                        <FolderOpen className="w-3 h-3 mr-1.5" /> Move
+                      </Button>
+                      <Link href={`/admin/flipbooks/${fb?.id}`} className="contents">
                         <Button variant="outline" size="sm" className="w-full"><Settings className="w-3 h-3 mr-1.5" /> Settings</Button>
                       </Link>
-                      <Button variant="outline" size="sm" onClick={() => handleDelete(fb?.id ?? "")}
-                        className="text-red-500 hover:text-red-700 hover:bg-red-50 border-red-200">
+                      <Button variant="outline" size="sm" className="w-full text-red-500 hover:text-red-700 hover:bg-red-50 border-red-200"
+                        onClick={() => handleDelete(fb?.id ?? "")}>
                         <Trash2 className="w-3 h-3 mr-1.5" /> Delete
                       </Button>
                     </div>
@@ -332,7 +437,7 @@ export default function DashboardContent() {
         ) : (
           <Card className="border-0 shadow-md overflow-hidden">
             <div className="divide-y">
-              {flipbooks?.map?.((fb: FlipbookItem, i: number) => (
+              {filteredFlipbooks?.map?.((fb: FlipbookItem, i: number) => (
                 <motion.div key={fb?.id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.04 }}
                   className="flex items-center gap-4 p-4 hover:bg-muted/40 transition-colors"
                 >
@@ -369,6 +474,9 @@ export default function DashboardContent() {
                     <Button variant="outline" size="sm" onClick={() => openReplaceModal(fb)}>
                       <Upload className="w-3 h-3 mr-1.5" /> Replace
                     </Button>
+                    <Button variant="outline" size="sm" onClick={() => setMoveTarget(fb)}>
+                      <FolderOpen className="w-3 h-3 mr-1.5" /> Move
+                    </Button>
                     <Link href={`/admin/flipbooks/${fb?.id}`}>
                       <Button variant="outline" size="sm"><Settings className="w-3 h-3 mr-1.5" /> Settings</Button>
                     </Link>
@@ -384,6 +492,84 @@ export default function DashboardContent() {
         )}
       </div>
 
+      {/* ── Move to Folder modal ─────────────────────────────────────── */}
+      <AnimatePresence>
+        {moveTarget && (
+          <motion.div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => !isMoving && setMoveTarget(null)} />
+            <motion.div
+              className="relative bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4"
+              initial={{ scale: 0.95, opacity: 0, y: 10 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 10 }}
+              transition={{ type: "spring", duration: 0.3 }}
+            >
+              <div className="flex items-start justify-between">
+                <div>
+                  <h3 className="font-display text-lg font-bold flex items-center gap-2">
+                    <FolderOpen className="w-5 h-5 text-indigo-600" /> Move to Folder
+                  </h3>
+                  <p className="text-sm text-muted-foreground mt-0.5 truncate max-w-[240px]">{moveTarget.title}</p>
+                </div>
+                <button onClick={() => !isMoving && setMoveTarget(null)} disabled={isMoving}
+                  className="text-muted-foreground hover:text-foreground disabled:opacity-40 mt-0.5">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="space-y-2 max-h-72 overflow-y-auto">
+                {/* No Folder */}
+                <button
+                  onClick={() => handleMove(null)}
+                  disabled={isMoving || moveTarget.folderId === null}
+                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm text-left transition-colors border ${
+                    moveTarget.folderId === null
+                      ? "bg-gray-50 border-gray-200 text-gray-400 cursor-default"
+                      : "border-gray-200 hover:bg-indigo-50 hover:border-indigo-200 hover:text-indigo-700"
+                  }`}
+                >
+                  <div className="w-8 h-8 bg-gray-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                    <BookOpen className="w-4 h-4 text-gray-400" />
+                  </div>
+                  <span className="flex-1 font-medium">No Folder</span>
+                  {moveTarget.folderId === null && <span className="text-xs text-gray-400 flex-shrink-0">Current</span>}
+                  {isMoving && moveTarget.folderId !== null && <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />}
+                </button>
+
+                {/* Folder list */}
+                {folders.map(f => {
+                  const isCurrent = moveTarget.folderId === f.id;
+                  return (
+                    <button
+                      key={f.id}
+                      onClick={() => handleMove(f.id)}
+                      disabled={isMoving || isCurrent}
+                      className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm text-left transition-colors border ${
+                        isCurrent
+                          ? "bg-indigo-50 border-indigo-200 text-indigo-700 cursor-default"
+                          : "border-gray-200 hover:bg-indigo-50 hover:border-indigo-200 hover:text-indigo-700"
+                      }`}
+                    >
+                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${isCurrent ? "bg-indigo-100" : "bg-indigo-50"}`}>
+                        <FolderOpen className={`w-4 h-4 ${isCurrent ? "text-indigo-600" : "text-indigo-400"}`} />
+                      </div>
+                      <span className="flex-1 font-medium">{f.name}</span>
+                      {isCurrent && <span className="text-xs text-indigo-400 flex-shrink-0">Current</span>}
+                      {isMoving && !isCurrent && <Loader2 className="w-4 h-4 animate-spin flex-shrink-0 opacity-0" />}
+                    </button>
+                  );
+                })}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* ── Replace PDF modal ────────────────────────────────────────── */}
       <AnimatePresence>
         {replaceTarget && (
@@ -393,10 +579,7 @@ export default function DashboardContent() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
           >
-            {/* Backdrop */}
             <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={closeReplaceModal} />
-
-            {/* Dialog */}
             <motion.div
               className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-5"
               initial={{ scale: 0.95, opacity: 0, y: 10 }}
@@ -404,7 +587,6 @@ export default function DashboardContent() {
               exit={{ scale: 0.95, opacity: 0, y: 10 }}
               transition={{ type: "spring", duration: 0.3 }}
             >
-              {/* Header */}
               <div className="flex items-start justify-between">
                 <div>
                   <h3 className="font-display text-lg font-bold flex items-center gap-2">
@@ -418,7 +600,6 @@ export default function DashboardContent() {
                 </button>
               </div>
 
-              {/* Drop zone */}
               <div
                 className={`border-2 border-dashed rounded-xl p-6 text-center transition-colors ${
                   isBusy
@@ -474,14 +655,12 @@ export default function DashboardContent() {
                 )}
               </div>
 
-              {/* Error */}
               {replaceError && (
                 <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 flex-shrink-0" /> {replaceError}
                 </div>
               )}
 
-              {/* Progress */}
               {(replaceStatus === "uploading" || replaceStatus === "processing") && (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />
@@ -519,7 +698,6 @@ export default function DashboardContent() {
                 </div>
               )}
 
-              {/* Actions */}
               <div className="flex gap-3 pt-1">
                 <Button variant="outline" className="flex-1" onClick={closeReplaceModal} disabled={isBusy}>
                   {replaceStatus === "done" ? "Close" : "Cancel"}

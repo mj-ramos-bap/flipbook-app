@@ -82,6 +82,13 @@ export default function FlipbookCanvas({
   useEffect(() => { pageImageUrlsRef.current = pageImageUrls ?? null; }, [pageImageUrls]);
   // Fade the book back in whenever a re-init completes (bookReady flips to true)
   useEffect(() => { if (bookReady) setBookVisible(true); }, [bookReady]);
+  // Reset pan offset when user zooms back to 1×
+  useEffect(() => {
+    if (zoom <= 1) {
+      setPanOffset({ x: 0, y: 0 });
+      panOffsetRef.current = { x: 0, y: 0 };
+    }
+  }, [zoom]);
   const [soundEnabled,   setSoundEnabled]   = useState(enablePageSound);
   const [thumbnails,     setThumbnails]     = useState<string[]>([]);
   const [showThumbnails, setShowThumbnails] = useState(false);
@@ -97,6 +104,13 @@ export default function FlipbookCanvas({
   const [jumpPage,       setJumpPage]       = useState("");
   const [prevFlipData,   setPrevFlipData]   = useState<string | null>(null);
   const prevFlipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Pan (drag-to-pan when zoomed) ─────────────────────────────────
+  const [panOffset,   setPanOffset]   = useState({ x: 0, y: 0 });
+  const panOffsetRef  = useRef({ x: 0, y: 0 });
+  const isPanningRef  = useRef(false);
+  const panStartRef   = useRef({ x: 0, y: 0, ox: 0, oy: 0 });
+  const [isGrabbing,  setIsGrabbing]  = useState(false);
 
   const primaryColor = branding?.primaryColor ?? "#4F46E5";
 
@@ -493,6 +507,8 @@ export default function FlipbookCanvas({
         const startX = dragStartX;
         dragStartX = null;
         if (startX === null) return;
+        // Skip page-flip logic when zoomed — pointer drag is panning instead
+        if (zoomRef.current > 1) return;
         const delta = e.clientX - startX;
         // PageFlip snapped back (user_fold → read) but drag was intentional: force flip.
         if (pfState === "read" && pfPrevState === "user_fold" && Math.abs(delta) > 30) {
@@ -602,6 +618,27 @@ export default function FlipbookCanvas({
         e.preventDefault();
         const delta = e.deltaY > 0 ? -0.08 : 0.08;
         applyZoom(Math.max(1, Math.min(3, zoomRef.current + delta)));
+        return;
+      }
+      // When zoomed in, plain scroll pans the view instead of flipping pages
+      if (zoomRef.current > 1) {
+        e.preventDefault();
+        const bookAreaEl = bookAreaRef.current;
+        const rawX = panOffsetRef.current.x - (e.deltaX || 0);
+        const rawY = panOffsetRef.current.y - e.deltaY;
+        const vpW  = bookAreaEl ? bookAreaEl.clientWidth  : window.innerWidth;
+        const vpH  = bookAreaEl ? bookAreaEl.clientHeight : window.innerHeight - 96;
+        const effectiveZoomW = zoomRef.current * fsZoomRef.current;
+        const contentW = displayWRef.current * (isDoubleRef.current ? 2 : 1) * effectiveZoomW;
+        const contentH = displayHRef.current * effectiveZoomW;
+        const maxX = Math.max(0, (contentW - vpW) / 2);
+        const maxY = Math.max(0, (contentH - vpH) / 2);
+        const clamped = {
+          x: Math.max(-maxX, Math.min(maxX, rawX)),
+          y: Math.max(-maxY, Math.min(maxY, rawY)),
+        };
+        panOffsetRef.current = clamped;
+        setPanOffset(clamped);
         return;
       }
       // Let sidebars and overlays scroll naturally
@@ -1067,7 +1104,8 @@ export default function FlipbookCanvas({
             // book snaps to its new size instantly instead of sliding from the
             // old (wrong) position. bookReady:true allows smooth zoom and
             // fullscreen-enter/exit scale transitions.
-            const transformTransition = bookReady
+            // Disable transition while actively panning to prevent motion lag
+            const transformTransition = (bookReady && !isGrabbing)
               ? 'transform 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94)'
               : 'none';
 
@@ -1076,7 +1114,7 @@ export default function FlipbookCanvas({
               clipStyle = {};
               innerStyle = {
                 position: 'relative',
-                transform: `scale(${totalZoom})`,
+                transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${totalZoom})`,
                 transformOrigin: 'center center',
                 transition: transformTransition,
               };
@@ -1090,7 +1128,7 @@ export default function FlipbookCanvas({
 
               innerStyle = {
                 position: 'relative',
-                transform: `translateX(${coverShift * totalZoom}px) scale(${totalZoom})`,
+                transform: `translate(${coverShift * totalZoom + panOffset.x}px, ${panOffset.y}px) scale(${totalZoom})`,
                 transformOrigin: 'center center',
                 transition: transformTransition,
               };
@@ -1132,6 +1170,61 @@ export default function FlipbookCanvas({
           })()}
           </div>
 
+
+          {/* Pan overlay — sits above the book (z-5) but below nav arrows (z-10).
+              Only active when zoom > 1; captures pointer events so PageFlip
+              never initiates a drag-to-flip while the user is panning. */}
+          {zoom > 1 && (
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                zIndex: 5,
+                cursor: isGrabbing ? 'grabbing' : 'grab',
+                touchAction: 'none',
+              }}
+              onPointerDown={(e) => {
+                if (e.button !== 0) return;
+                e.currentTarget.setPointerCapture(e.pointerId);
+                isPanningRef.current = true;
+                setIsGrabbing(true);
+                panStartRef.current = {
+                  x: e.clientX, y: e.clientY,
+                  ox: panOffsetRef.current.x, oy: panOffsetRef.current.y,
+                };
+              }}
+              onPointerMove={(e) => {
+                if (!isPanningRef.current) return;
+                const dx = e.clientX - panStartRef.current.x;
+                const dy = e.clientY - panStartRef.current.y;
+                const rawX = panStartRef.current.ox + dx;
+                const rawY = panStartRef.current.oy + dy;
+                const bookAreaEl = bookAreaRef.current;
+                const vpW = bookAreaEl ? bookAreaEl.clientWidth  : window.innerWidth;
+                const vpH = bookAreaEl ? bookAreaEl.clientHeight : window.innerHeight - 96;
+                const effectiveZoom = zoomRef.current * fsZoomRef.current;
+                const contentW = displayWRef.current * (isDoubleRef.current ? 2 : 1) * effectiveZoom;
+                const contentH = displayHRef.current * effectiveZoom;
+                const maxX = Math.max(0, (contentW - vpW) / 2);
+                const maxY = Math.max(0, (contentH - vpH) / 2);
+                const clamped = {
+                  x: Math.max(-maxX, Math.min(maxX, rawX)),
+                  y: Math.max(-maxY, Math.min(maxY, rawY)),
+                };
+                panOffsetRef.current = clamped;
+                setPanOffset(clamped);
+              }}
+              onPointerUp={(e) => {
+                e.currentTarget.releasePointerCapture(e.pointerId);
+                isPanningRef.current = false;
+                setIsGrabbing(false);
+              }}
+              onPointerCancel={() => {
+                isPanningRef.current = false;
+                setIsGrabbing(false);
+              }}
+            />
+          )}
 
           {!bookReady && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">

@@ -5,13 +5,17 @@ import { authOptions } from "@/lib/auth-options";
 import { prisma } from "@/lib/db";
 import { getFileUrl } from "@/lib/s3";
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { searchParams } = new URL(req.url);
+    const folderId = searchParams.get("folderId");
+    const where: any = folderId === "none" ? { folderId: null } : folderId ? { folderId } : {};
     const flipbooks = await prisma.flipbook.findMany({
+      where,
       orderBy: { createdAt: "desc" },
       include: { _count: { select: { views: true } } },
     });

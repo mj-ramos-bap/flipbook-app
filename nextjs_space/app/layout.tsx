@@ -19,9 +19,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <head>
-        <script src="https://apps.abacus.ai/chatllm/appllm-lib.js" />
-      </head>
+      <head />
       <body className={`${dmSans.variable} ${plusJakarta.variable} ${jetbrainsMono.variable} font-sans antialiased`} suppressHydrationWarning>
         <style dangerouslySetInnerHTML={{ __html: `[data-hydration-error] { display: none !important; }` }} />
         <Providers>{children}</Providers>
